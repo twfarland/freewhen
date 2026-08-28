@@ -1,0 +1,8 @@
+{application, fw_core, [
+    {description, "The FreeWhen domain: pure, process-free, dependency-free."},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [kernel, stdlib, crypto]},
+    {env, []},
+    {modules, []}
+]}.

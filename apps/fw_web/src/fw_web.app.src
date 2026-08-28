@@ -1,0 +1,9 @@
+{application, fw_web, [
+    {description, "The edge: HTTP, the websocket, JSON, and the browser client."},
+    {vsn, "0.1.0"},
+    {registered, [fw_web_sup]},
+    {mod, {fw_web_app, []}},
+    {applications, [kernel, stdlib, cowboy, fw_core, fw_runtime]},
+    {env, []},
+    {modules, []}
+]}.

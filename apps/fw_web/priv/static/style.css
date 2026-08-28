@@ -1,0 +1,201 @@
+/* One stylesheet, no framework. The grid is the only interesting part. */
+
+:root {
+  --ink: #16181d;
+  --paper: #fbfbfa;
+  --muted: #6b7280;
+  --line: #e3e3e0;
+  --accent: #2f6f4f;
+  --busy: #c2410c;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8e8e6;
+    --paper: #16181d;
+    --muted: #9aa0aa;
+    --line: #2c2f36;
+    --accent: #6fcf97;
+    --busy: #f97316;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  max-width: 62rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 1.75rem 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+
+.tagline,
+.fineprint {
+  color: var(--muted);
+  font-size: 0.875rem;
+  max-width: 44rem;
+}
+
+.status {
+  min-height: 1.4em;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin: 1rem 0;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+input,
+select,
+button {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+button {
+  cursor: pointer;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+form .status {
+  flex-basis: 100%;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.row input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.8rem;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1.5rem;
+}
+
+ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+li {
+  margin: 0.2rem 0;
+}
+
+li.waiting {
+  color: var(--muted);
+  font-style: italic;
+}
+
+#candidates button {
+  width: 100%;
+  text-align: left;
+}
+
+.picked {
+  padding: 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.file input {
+  border: none;
+  padding-left: 0;
+}
+
+/* The week: one column per local day, one cell per slot. */
+.grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  margin-top: 0.5rem;
+  overflow-x: auto;
+}
+
+.day {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 4.5rem;
+}
+
+/*
+ * --weight is the fraction of attendees free in that slot, so the colour is a
+ * count and never an identity: it says three people are free, never which.
+ */
+.slot {
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  cursor: crosshair;
+  touch-action: none;
+  background: color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line));
+}
+
+.slot.everyone {
+  outline: 1px solid var(--accent);
+}
+
+.slot.busy {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--busy),
+    var(--busy) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+

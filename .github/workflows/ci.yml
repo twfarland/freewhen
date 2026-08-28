@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          rebar3-version: "3.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The client is built first: the release embeds it, and a type error
+      # there should fail the build before anything slower runs.
+      - name: Build the client
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          npm run build
+
+      - name: Cache the dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: _build/default/*_plt
+          key: plt-${{ runner.os }}-otp27-${{ hashFiles('rebar.lock') }}
+
+      - run: rebar3 compile
+      - run: rebar3 eunit
+      - run: rebar3 ct
+      - run: rebar3 xref
+      - run: rebar3 dialyzer

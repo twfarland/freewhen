@@ -1,0 +1,9 @@
+{application, fw_runtime, [
+    {description, "Rooms as processes: supervision, addressing, entropy, limits."},
+    {vsn, "0.1.0"},
+    {registered, [fw_runtime_sup, fw_room_sup, fw_directory, fw_limiter]},
+    {mod, {fw_runtime_app, []}},
+    {applications, [kernel, stdlib, crypto, fw_core]},
+    {env, []},
+    {modules, []}
+]}.

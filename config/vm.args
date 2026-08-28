@@ -1,0 +1,12 @@
+-sname freewhen
+-setcookie freewhen_local
+
+## Rooms are RAM-only and short-lived; a crash dump would be the one artifact
+## that outlives them. Zero retention means zero crash dumps.
+-env ERL_CRASH_DUMP /dev/null
+-env ERL_CRASH_DUMP_SECONDS 0
+
++K true
++A 8
+## Bound the atom table: room hashes and aliases must never become atoms.
++t 1048576

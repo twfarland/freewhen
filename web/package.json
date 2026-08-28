@@ -1,0 +1,17 @@
+{
+  "name": "freewhen-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --target=es2022 --minify --outfile=../apps/fw_web/priv/static/app.js",
+    "watch": "esbuild src/main.ts --bundle --format=esm --target=es2022 --outfile=../apps/fw_web/priv/static/app.js --watch",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
+  }
+}

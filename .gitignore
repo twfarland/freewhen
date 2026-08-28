@@ -1,0 +1,10 @@
+_build/
+.rebar3/
+rebar3.crashdump
+*.beam
+erl_crash.dump
+.erlang.cookie
+log/
+/tmp/
+web/node_modules/
+apps/fw_web/priv/static/app.js
