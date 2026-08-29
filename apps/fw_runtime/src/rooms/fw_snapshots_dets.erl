@@ -68,7 +68,7 @@ terminate(_Reason, _State) -> survivable(dets:close(?TABLE), close).
 %%% ---- internal ----
 
 %% A disk that will not take a write loses durability, not the rooms. Killing a
-%% live meeting because the volume filled up would be the worse failure, so the
+%% live meeting because the disk filled up would be the worse failure, so the
 %% error is logged and the room carries on in memory.
 survivable(ok, _What) ->
     ok;

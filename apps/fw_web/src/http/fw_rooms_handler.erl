@@ -2,7 +2,8 @@
 -moduledoc """
 `POST /api/rooms` — the only endpoint that makes the server hold something.
 
-Creating a room reserves memory for up to a day on nothing but an anonymous
+Creating a room reserves memory for as long as it is used, on nothing but an
+anonymous
 request, so this is the one place a rate limit is load-bearing rather than
 tidy. Everything else either reads existing state or is bounded by a room that
 already exists.

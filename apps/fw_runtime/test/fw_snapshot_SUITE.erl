@@ -48,14 +48,14 @@ a_room_survives_a_restart_with_everyone_in_it(Config) ->
     {Hash, _Token} = room(),
     {ok, Pid} = fw_rooms:find(Hash),
     {ok, {joined, Id}} = fw_room_server:command(Pid, {join, <<"Blue Falcon">>}),
-    {ok, ok} = fw_room_server:command(Pid, {submit, Id, [1, 2]}),
+    {ok, ok} = fw_room_server:command(Pid, {submit, Id, [0, 3, 4, 5, 6, 7]}),
 
     ok = restart(Config),
 
     {ok, Restored} = fw_rooms:find(Hash),
     {ok, Room} = fw_room_server:watch(Restored, self()),
     ?assertEqual([<<"Blue Falcon">>], [fw_attendee:alias(A) || A <- fw_room:attendees(Room)]),
-    ?assertEqual([1, 0, 0, 1, 1, 1, 1, 1], fw_room:heatmap(Room)).
+    ?assertEqual([1, 0, 0, 1, 1, 1, 1, 1], fw_schedule:heatmap(Room)).
 
 %% Expiry is a promise about wall-clock time, not about uptime. Written
 %% directly with a deadline already in the past, so nothing here waits.
@@ -106,7 +106,7 @@ without_a_snapshot_store_a_restart_loses_everything(Config) ->
 
 boot(Overrides) ->
     ok = load(fw_runtime),
-    ok = application:set_env(fw_runtime, room_ttl_ms, 86_400_000),
+    ok = application:set_env(fw_runtime, room_idle_ms, 86_400_000),
     maps:foreach(fun(Key, Value) -> application:set_env(fw_runtime, Key, Value) end, Overrides),
     {ok, _Started} = application:ensure_all_started(fw_runtime),
     ok.
@@ -137,7 +137,7 @@ long_expired() ->
             duration_slots => 2,
             host_token => <<"whatever">>,
             capacity => 4,
-            ttl_ms => 1
+            idle_ms => 1
         },
         0
     ),

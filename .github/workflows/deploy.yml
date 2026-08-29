@@ -1,0 +1,115 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# One machine owns every room, so two deploys must never overlap.
+concurrency: deploy
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    # Pinned, not `latest`: the release bundles ERTS and is linked against this
+    # runner's glibc, so it has to be the same Ubuntu the server runs. The
+    # playbook asserts the far end matches.
+    runs-on: ubuntu-24.04
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          rebar3-version: "3.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # rebar.config decides the version; a tag only confirms it. Deploying a
+      # tag that disagrees would put a release on the box under a name nobody
+      # can map back to a commit.
+      - name: The tag must agree with rebar.config
+        run: |
+          VERSION=$(sed -n 's/.*{release, {freewhen, "\([^"]*\)"}.*/\1/p' rebar.config)
+          echo "version=$VERSION" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match rebar.config version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Build the client
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          npm test
+          npm run build
+
+      - name: Cache the dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: _build/default/*_plt
+          key: plt-${{ runner.os }}-otp27-${{ hashFiles('rebar.lock') }}
+
+      # The same checks CI runs. Duplicated on purpose rather than trusting a
+      # green tick on some earlier commit: there is one instance, and shipping
+      # red to it is not recoverable by rolling back a container.
+      - name: Check
+        run: rebar3 do compile, eunit, ct, xref, dialyzer
+
+      - name: Build the release
+        run: rebar3 as prod tar
+
+      - name: Ansible
+        run: pipx install --include-deps ansible
+
+      - name: Trust the host we are deploying to
+        env:
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -m 700 -p ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          DOMAIN: ${{ secrets.DEPLOY_DOMAIN }}
+        run: |
+          printf '[freewhen]\n%s ansible_user=root\n\n[freewhen:vars]\ndomain=%s\n' \
+            "$HOST" "$DOMAIN" > inventory.ini
+          ansible-playbook -i inventory.ini deploy/site.yml
+
+      # The deploy is not finished until the thing answers. A restart takes a
+      # couple of seconds and the rooms are restored before the listener opens,
+      # so this should pass almost immediately.
+      - name: Smoke test
+        env:
+          DOMAIN: ${{ secrets.DEPLOY_DOMAIN }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 5 "https://$DOMAIN/healthz"; then exit 0; fi
+            sleep 2
+          done
+          echo "https://$DOMAIN/healthz never answered" >&2
+          exit 1
+
+      # Keeps rollback cheap: the previous tarball is a download rather than a
+      # rebuild. It contains no secrets — every knob is an environment variable
+      # set by the systemd unit.
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: _build/prod/rel/freewhen/freewhen-${{ env.version }}.tar.gz
+          generate_release_notes: true

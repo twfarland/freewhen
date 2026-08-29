@@ -15,12 +15,14 @@ stop(_State) ->
 
 %%% ---- internal ----
 
-%% Two values differ between a laptop and a deployment, and both arrive from
-%% the environment so that one image runs everywhere. A malformed PORT crashes
-%% the boot, which is the correct response to a misconfigured deployment.
+%% Three values differ between a laptop and a deployment, and all three arrive
+%% from the environment so that one release runs everywhere. A malformed one
+%% crashes the boot, which is the correct response to a misconfigured
+%% deployment.
 settings() ->
     #{
         port => port(os:getenv("PORT")),
+        bind => bind(os:getenv("FW_BIND")),
         max_frame_bytes => env(max_frame_bytes, 65_536),
         idle_timeout_ms => env(idle_timeout_ms, 60_000),
         allowed_origins => origins(os:getenv("FW_ALLOWED_ORIGINS"))
@@ -28,6 +30,14 @@ settings() ->
 
 port(false) -> env(port, 8080);
 port(Value) -> list_to_integer(Value).
+
+%% Deployed, this is 127.0.0.1: the proxy is the only thing that may reach the
+%% node, which is what makes `x-forwarded-for` worth believing in `fw_peer`.
+bind(false) -> env(bind, any);
+bind("") -> env(bind, any);
+bind(Value) -> address(inet:parse_address(Value)).
+
+address({ok, Address}) -> Address.
 
 origins(false) -> env(allowed_origins, any);
 origins("") -> env(allowed_origins, any);

@@ -1,0 +1,57 @@
+---
+# The recovery drill.
+#
+#   ansible-playbook -i inventory.ini deploy/reboot.yml
+#
+# Reboots the machine and refuses to finish until the public URL answers again.
+# This is not a maintenance task, it is the test of a requirement: everything
+# must come back with no human intervention, because unattended-upgrades will
+# do exactly this at 04:00 UTC with nobody watching. Run it once after
+# provisioning, and again whenever the unit or the boot path changes.
+#
+# Rooms are expected to survive, because they are snapshotted and restored
+# before the listener opens. A room is lost only if its deadline passed while
+# the node was down.
+
+- name: Prove FreeWhen comes back on its own
+  hosts: freewhen
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Rooms before
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/healthz
+        return_content: true
+      register: before
+
+    - name: Reboot, and wait for SSH
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+
+    # Deliberately the public URL and not the loopback one: this has to prove
+    # that systemd, the node, Caddy and its certificate all came back, not just
+    # that the machine is pingable.
+    - name: Wait for the site to answer over TLS
+      ansible.builtin.uri:
+        url: https://{{ domain }}/healthz
+        return_content: true
+      register: after
+      until: after.status is defined and after.status == 200
+      retries: 30
+      delay: 5
+      delegate_to: localhost
+      become: false
+
+    - name: Nothing may be left in a failed state
+      ansible.builtin.command: systemctl is-failed --quiet '*'
+      changed_when: false
+      register: failed_units
+      failed_when: failed_units.rc == 0
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Back up in {{ (after.content | from_json).uptimeSeconds }}s of node uptime.
+          Rooms before {{ (before.content | from_json).rooms }},
+          after {{ (after.content | from_json).rooms }}.

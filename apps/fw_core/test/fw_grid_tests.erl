@@ -52,11 +52,9 @@ a_window_of_no_slots_is_not_a_window_test() ->
 
 %%% ---- instants ----
 
-the_first_slot_starts_when_the_grid_does_test() ->
-    ?assertEqual(1_700_000_000_000, fw_grid:slot_start(0, grid())).
+the_first_window_starts_when_the_grid_does_test() ->
+    ?assertMatch({1_700_000_000_000, _End}, fw_grid:window(0, 1, grid())).
 
-each_slot_is_one_slot_length_after_the_last_test() ->
-    ?assertEqual(1_700_000_000_000 + 4 * 15 * 60_000, fw_grid:slot_start(4, grid())).
 
 a_window_runs_from_its_first_slot_to_the_end_of_its_last_test() ->
     ?assertEqual(

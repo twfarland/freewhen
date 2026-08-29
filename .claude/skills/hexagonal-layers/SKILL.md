@@ -96,7 +96,8 @@ valid — that logic escaped from `fw_core`. Move it back.
 
 ## Adding a dependency
 
-New third-party dependencies need an ADR. The list today is `cowboy` at
+A new third-party dependency needs an entry in `docs/ARCHITECTURE.md` under
+Decisions, written before the code. The list today is `cowboy` at
 runtime, `gun` in the test profile, and `lit` in the browser; JSON comes from
 OTP's own `json` module.
 Every dependency is code that has to be audited, patched and shipped, and this

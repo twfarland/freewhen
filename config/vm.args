@@ -1,5 +1,17 @@
--sname freewhen
+## A long name pinned to the loopback address, not -sname. The node is only
+## reachable there anyway, and naming it 127.0.0.1 is what lets observer on a
+## laptop connect straight through an SSH tunnel with no hostname to resolve.
+-name freewhen@127.0.0.1
 -setcookie freewhen_local
+
+## Distribution exists so that an operator can attach a remote_console on the
+## machine, and so that observer can be pointed at it over an SSH tunnel.
+## Bound to loopback the cookie above is not a secret, and epmd is not
+## reachable from the network. The port is pinned because a tunnel cannot
+## forward a port chosen at random.
+-kernel inet_dist_use_interface {127,0,0,1}
+-kernel inet_dist_listen_min 9100
+-kernel inet_dist_listen_max 9100
 
 ## Rooms are RAM-only and short-lived; a crash dump would be the one artifact
 ## that outlives them. Zero retention means zero crash dumps.

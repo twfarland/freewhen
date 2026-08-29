@@ -12,7 +12,7 @@ depends on ambient state a test cannot see.
 -export_type([t/0]).
 
 -type t() :: #{
-    room_ttl_ms := pos_integer(),
+    room_idle_ms := pos_integer(),
     finalize_grace_ms := pos_integer(),
     max_rooms := pos_integer(),
     max_attendees_per_room := pos_integer(),
@@ -27,10 +27,10 @@ depends on ambient state a test cannot see.
 -spec load() -> t().
 load() ->
     Settings = #{
-        room_ttl_ms => env(room_ttl_ms, 86_400_000),
+        room_idle_ms => env(room_idle_ms, 2_592_000_000),
         finalize_grace_ms => env(finalize_grace_ms, 300_000),
         max_rooms => env(max_rooms, 5_000),
-        max_attendees_per_room => env(max_attendees_per_room, 64),
+        max_attendees_per_room => env(max_attendees_per_room, 16),
         create_bucket => env(create_bucket, #{capacity => 10, refill_per_sec => 1, cost => 10}),
         room_store => env(room_store, fw_directory),
         snapshots => snapshots(),
@@ -58,8 +58,8 @@ default_snapshots(_Path) -> fw_snapshots_dets.
 
 snapshot_file() ->
     case os:getenv("FW_SNAPSHOT_FILE") of
-        false -> env(snapshot_file, "/data/freewhen.dets");
-        "" -> env(snapshot_file, "/data/freewhen.dets");
+        false -> env(snapshot_file, "/var/lib/freewhen/rooms.dets");
+        "" -> env(snapshot_file, "/var/lib/freewhen/rooms.dets");
         Path -> Path
     end.
 

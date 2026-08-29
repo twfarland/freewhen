@@ -1,143 +1,238 @@
 # Operations
 
-The whole system is one BEAM node with one dependency and one file. There is
-no database to back up, no migration to run, and no schema — which means most
-of what usually goes in this document does not exist.
+One BEAM node, one runtime dependency, one file. No database to back up, no
+migration to run, no schema — which is why most of what usually goes in this
+document does not exist.
 
-## Running it
+Running it on a laptop is [DEVELOPING.md](DEVELOPING.md); this is the deployed
+machine. Why it is shaped this way is [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## The machine, once
+
+A **Hetzner CX22** (2 vCPU, 4 GB) running **Ubuntu 24.04**, your SSH key, and
+an `A` record. The measured worst case is about 800 MB of room state at the
+configured caps, so 4 GB leaves real headroom; anything smaller means lowering
+`max_rooms` to match.
 
 ```sh
-cd web && npm ci && npm run build   # once, and after any client change
-rebar3 shell                        # http://localhost:8080
+cp deploy/inventory.example.ini deploy/inventory.ini   # gitignored
+$EDITOR deploy/inventory.ini                           # host and domain
+ansible-galaxy collection install -r deploy/requirements.yml
+ansible-playbook -i deploy/inventory.ini deploy/site.yml
+ansible-playbook -i deploy/inventory.ini deploy/reboot.yml   # prove it comes back
 ```
-
-`rebar3 shell` boots `fw_web` and everything under it with `config/sys.config`.
 
 ## Deploying
 
 ```sh
-fly deploy
+cd web && npm ci && npm run build && cd ..
+rebar3 as prod tar
+ansible-playbook -i deploy/inventory.ini deploy/site.yml
 ```
 
-The `Dockerfile` builds the client in a node stage, the release in an erlang
-stage, and ships an alpine image containing only the release.
+**Build on Ubuntu 24.04.** The release bundles ERTS, so it is linked against
+the glibc of whatever built it, and on any other platform `rebar3 as prod tar`
+does not even produce a POSIX start script. CI pins `ubuntu-24.04` and the
+playbook asserts the target's distribution before shipping anything.
 
-Two environment variables matter, both read once at boot:
+The playbook is idempotent and restarts the node only when the release actually
+changed, so re-running it to fix a firewall rule does not drop every open
+websocket.
+
+| playbook | |
+|---|---|
+| `site.yml` | provision and deploy. Safe to re-run |
+| `site.yml --tags deploy` | ship the code and restart, skipping the machine |
+| `site.yml --tags reload` | ship the code and swap it in **without** restarting |
+| `site.yml --tags provision` | the machine only, no code |
+| `status.yml` | read-only: services, health, disk, snapshot, node memory |
+| `reboot.yml` | the recovery drill — reboot and refuse to finish until the site answers |
+
+### From CI
+
+`.github/workflows/deploy.yml` does all of it on `workflow_dispatch` or a `v*`
+tag, on `ubuntu-24.04` so the glibc matches by construction. It runs the full
+check suite first, refuses a tag that disagrees with the version in
+`rebar.config`, smoke-tests the public URL afterwards, and attaches the tarball
+to a GitHub Release. Four secrets: `DEPLOY_HOST`, `DEPLOY_DOMAIN`,
+`SSH_PRIVATE_KEY`, and `SSH_KNOWN_HOSTS` (from `ssh-keyscan`, pinned rather
+than scanned at deploy time).
+
+This is also the answer on Windows: Ansible has no native Windows control node,
+and Windows cannot build a deployable release anyway.
+
+### Reloading without a restart
+
+`--tags reload` unpacks the release and `code:atomic_load/1`s exactly the
+modules that changed, on the running node. No socket drops, no rooms
+interrupted.
+
+**For changed function bodies only.** It does not migrate `gen_server` state,
+restructure supervision or change application environment. Change the shape of
+`fw_room_server`'s record and the new code meets the old state, which crashes
+that room — one room, because rooms are `temporary`, but a real one.
+`--tags deploy` is the honest answer to anything structural, and a restart
+costs about two seconds of reconnection and no rooms.
+
+It refuses rather than damages: `soft_purge` fails if a process is still
+running the previous version, so a second reload before the first has drained
+stops with an error instead of killing rooms.
+
+## Coming back by itself
+
+Nothing needs a human after a reboot, which matters because
+`unattended-upgrades` reboots at 04:00 UTC for a kernel with nobody watching.
+
+| | |
+|---|---|
+| the node | `freewhen.service`, enabled, `Restart=always` with `StartLimitIntervalSec=0` so it never gives up |
+| the proxy | `caddy.service`, enabled, certificate already on disk |
+| the firewall | `ufw`, enabled — 22, 80, 443 in, nothing else |
+| the rooms | restored from the snapshot before the listener opens |
+
+`StartLimitIntervalSec=0` is the setting to be careful with in the other
+direction: without it, systemd gives up after five restarts in ten seconds and
+leaves the unit `failed`, which is exactly the state that needs somebody to
+notice. `reboot.yml` tests the claim rather than believing it.
+
+**Do not run two nodes.** The DETS file has no cross-node locking, and a room
+is a process: two machines means one has never heard of a hash, or both load it
+and split-brain. Nothing stops the node for you — no autoscaler, no idle
+shutdown — but `systemctl stop freewhen` takes every room with it and only the
+snapshot brings them back.
+
+## Environment
+
+Four variables, read once at boot, all set by the systemd unit.
 
 | variable | effect |
 |---|---|
-| `PORT` | listen port; defaults to the value in `sys.config` (8080) |
+| `PORT` | listen port; defaults to `sys.config` (8080) |
+| `FW_BIND` | interface to bind; `127.0.0.1` in production, unset in development |
 | `FW_ALLOWED_ORIGINS` | comma-separated origins allowed to open a websocket |
-| `FW_SNAPSHOT_FILE` | where rooms are written so a release does not lose them |
+| `FW_SNAPSHOT_FILE` | where rooms are written so a restart does not lose them |
 
 **`FW_SNAPSHOT_FILE` is what turns durability on.** Unset, rooms are never
-written down and a restart destroys every one of them. Set, it must point at a
-path that survives a deploy — a Fly volume, mounted in `fly.toml`. It is the
-only file this application writes, and it holds aliases and availability at
-rest; [ADR 0011](adr/0011-a-local-snapshot-so-a-restart-keeps-the-rooms.md)
-covers what that costs.
+written down and a restart destroys every one — including that 04:00 reboot.
+Set, it is `/var/lib/freewhen/rooms.dets`, mode 0700, the only file this
+application writes, and it holds aliases and availability at rest.
 
-**Set `FW_ALLOWED_ORIGINS` before making a deployment public.** Unset, every
-origin is accepted — a development default, not a policy. An origin is not an
-identity; what it buys is that another website cannot open a socket using a
-visitor's browser.
+**`FW_BIND=127.0.0.1` is load-bearing, not tidiness.** Caddy on the same host
+is then the only thing that can reach the node, which is the only reason
+`fw_peer` may believe `x-forwarded-for`. Open the node to the world and the
+rate limiter can be defeated by a header.
 
-Everything else — TTL, grace period, room and attendee caps, the rate
-limit — lives in `config/sys.config` and is baked into the image.
+**Set `FW_ALLOWED_ORIGINS` before going public.** The playbook sets it from the
+inventory's `domain`. Unset, every origin is accepted — a development default,
+not a policy. An origin is not an identity; it buys you that another website
+cannot open a socket using a visitor's browser.
 
-## One machine, on purpose
-
-A room lives in the memory of the process that created it, so `fly.toml` pins
-`min_machines_running = 1`, `auto_stop_machines = false`, and one volume.
-
-**Do not run two.** Two things break. The DETS file is local and has no
-cross-node locking, so two writers corrupt it — and on Fly a volume attaches to
-one machine anyway, so you would get two files each holding half the rooms.
-More fundamentally, a room is a process: if two people in the same room land on
-different machines, one of them is talking to a machine that has never heard of
-that hash, and loading it on both gives two processes that both think they own
-it. [ADR 0012](adr/0012-one-instance-and-what-more-would-take.md) has the
-reasoning and the scaling path.
-
-`auto_stop_machines = false` is the setting to be careful with: letting Fly
-stop an idle machine would take every room in progress with it, and idle is the
-normal state of this application. Idle does not mean unused.
+Everything else — the idle window, the settled grace, the caps, the rate
+limit — is in
+`config/sys.config` and ships inside the release.
 
 ## How much it holds
 
-Measured for a full week at quarter-hour resolution:
-
 | room | in memory | snapshot |
 |---|---|---|
-| 8 attendees, all answered | 3.0 kB | 2.0 kB |
-| 64 attendees, all answered | 22.7 kB | 14.3 kB |
+| 8 attendees, ordinary working week | 2.8 kB | 1.4 kB |
+| 16 attendees, maximally fragmented | 40 kB | ~25 kB |
 
-At `max_rooms = 5000` that is 15–110 MB of RAM and 10–70 MB of file, so the
-configured ceiling binds well before a 512 MB machine does. DETS itself stops
-at 2 GB, which this cannot reach.
+At `max_rooms = 20000` that is about 56 MB for real usage and 800 MB if every
+room were deliberately fragmented — which is what `MemoryMax=1536M` in the
+systemd unit is sized against. DETS stops at 2 GB and the file would reach
+500 MB only in the same adversarial case. If you raise either cap the number to
+check is memory, not disk: multiply
+`max_rooms × max_attendees_per_room × 2.5 kB`.
+
+The ceiling holds a **month** of rooms, not a day, because a room lives on
+idleness. 20,000 is roughly 660 new rooms a day sustained; past that, creation
+is refused rather than anything being evicted.
 
 The file does not shrink when rooms are deleted; DETS reuses the space, so
-expect it to sit near its high-water mark for the day. If you raise
-`max_rooms`, the number to check is memory, not disk: multiply the ceiling by
-23 kB for the worst case.
+expect it to sit near its high-water mark.
 
 ## Watching it
 
-`GET /healthz` returns status, the current room count and uptime. That is
-everything the server will report, and the omission is deliberate: per-room
-metrics would be a directory of which rooms exist and how busy they are, which
-is precisely what the design promises not to keep.
+`GET /healthz` returns status, room count and uptime. That is everything the
+server will report: per-room metrics would be a directory of which rooms exist
+and how busy they are, which is precisely what the design promises not to keep.
 
-After a deploy, watch the room count climb back rather than expecting it to
-have been preserved — rooms are recreated by their hosts, not restored.
+```sh
+ansible-playbook -i deploy/inventory.ini deploy/status.yml   # changes nothing
+ssh root@<host>
+sudo -u freewhen /opt/freewhen/current/bin/freewhen remote_console
+journalctl -u freewhen -f
+```
 
-Logs contain no room hash, alias, availability, timezone or host token. If you
-find yourself adding a log line that would help debug a specific room, that is
-the design working as intended — there is no way to debug a specific room, because there
-is no way to identify one.
+**observer** is a GUI, so it runs on your machine over an SSH tunnel. The node
+is named `freewhen@127.0.0.1` with its distribution port pinned to 9100 exactly
+so this works — a tunnel cannot forward a random port, and an address needs no
+name resolution.
 
-Crash dumps are disabled in `config/vm.args`. A dump would be the one artefact
-that outlives the rooms it contains.
+```sh
+ssh -N -L 4369:127.0.0.1:4369 -L 9100:127.0.0.1:9100 root@<host>
+# elsewhere; any local epmd would shadow the tunnel
+epmd -kill
+erl -name obs@127.0.0.1 -setcookie freewhen_local -hidden -run observer
+```
+
+Then **Nodes → Connect Node → `freewhen@127.0.0.1`**. The cookie in
+`config/vm.args` is not a secret: distribution is bound to loopback and `ufw`
+opens neither 4369 nor 9100, so the tunnel is the only way in. `runtime_tools`
+is in the release because observer loads `observer_backend` onto the node it
+watches.
+
+Logs contain no room hash, alias, availability or host token. If you find
+yourself wanting a log line to debug a specific room, that is the design
+working — there is no way to identify one. Crash dumps are disabled in
+`config/vm.args` for the same reason.
 
 ## What failure looks like
 
-**A room crashes.** Its supervisor does not restart it (`temporary`), the
-directory entry is removed by the monitor, and connected clients receive
-`closed` with reason `failed`. The link stops working. Other rooms are
-unaffected — that isolation is why the code is free to crash rather than
-defend.
+**A room crashes.** Not restarted (`temporary`), its directory entry removed by
+the monitor, connected clients get `closed` with reason `failed`, and the link
+stops working. Other rooms are unaffected — that isolation is why the code is
+free to crash rather than defend.
 
-**The node restarts or is deployed.** Every room process dies and every room
-comes back. `fw_rooms:restore/0` reads the snapshot file before the listener
-starts, so the rooms are already there when the first request arrives — look
-for `freewhen restored N rooms` in the boot log. Clients reconnect on their own
-within a few seconds. Rooms whose deadline passed while the node was down are
-dropped rather than revived.
+**The node restarts, deploys, or reboots for a kernel.** Every room process
+dies and every room comes back: `fw_rooms:restore/0` reads the snapshot before
+the listener starts, so look for `freewhen restored N rooms` in the boot log.
+Clients reconnect within a few seconds. Rooms whose deadline passed while the
+node was down are dropped rather than revived. If snapshots were off, or the
+disk went with the machine, a host's browser reopens the room from its token
+and everyone resubmits — which only works while that tab is open.
 
-If snapshots are off, or the file was lost with its volume, the fallback is
-[ADR 0008](adr/0008-rooms-are-resumed-from-the-host-token.md): a host's browser
-reopens the room at the same address from its token, and everyone resubmits
-what their own browser held. That only works while the host's tab is open,
-which is why the snapshot exists.
+**The snapshot will not write.** Logged as a warning; rooms carry on in memory
+and durability is lost until it is fixed. A full disk must not take a meeting
+down with it, so nothing crashes. Check `df` on `/var/lib` before the next
+restart, because that is when it will cost something.
 
-**Writes feel slow, or the volume is busy.** Each room writes at most once
-every two seconds, and only when something changed, so a room being actively
-painted costs one write per two seconds rather than one per cell. If that is
-still too much, the interval is `?SNAPSHOT_EVERY_MS` in `fw_room_server`, and
-raising it only widens the window a hard kill can lose.
+**Writes feel slow.** Each room writes at most once every two seconds and only
+when something changed. The interval is `?SNAPSHOT_EVERY_MS` in
+`fw_room_server`, and raising it only widens the window a hard kill can lose.
 
-**The snapshot file will not write.** Logged as a warning; rooms carry on in
-memory and durability is lost until it is fixed. A full disk must not take a
-meeting down with it, so nothing crashes. Check the volume before the next
-deploy, because that is when it will cost something.
+**A reload is refused.** A process is still running the previous version of a
+module — usually a second `--tags reload` before the first drained. Nothing
+changed; deploy properly and take the restart.
 
 **Memory climbs.** The ceilings are `max_rooms`, `max_attendees_per_room` and
-the bounded grid (2016 slots maximum). Room creation is rate limited per client
-address; the limiter sweeps its own buckets every minute so that rotating
-addresses cannot turn it into the leak it exists to prevent. Check
-`/healthz` for the room count before assuming a leak — 5000 rooms is the
-configured cap and roughly the expected ceiling.
+the bounded grid (2016 slots). Check `/healthz` for the room count before
+assuming a leak. The limiter sweeps its own buckets every minute so rotating
+addresses cannot turn it into the leak it exists to prevent.
 
-**Someone floods `POST /api/rooms`.** They get 429s from the token bucket, and
-503s once `max_rooms` is reached. Existing rooms are never evicted to admit a
-new one: refusing is correct, sacrificing someone's meeting is not.
+**Someone floods `POST /api/rooms`.** 429s from the token bucket, then 503s
+once `max_rooms` is reached. Existing rooms are never evicted to admit a new
+one: refusing is correct, sacrificing someone's meeting is not.
+
+## Deliberately absent
+
+**No backups.** The file holds meetings still being arranged — up to a month of
+them now, which is a longer exposure than it used to be. Losing it costs those
+meetings, and hosts can reopen a room from the token their browser holds.
+
+**No monitoring stack.** Point any external pinger at `/healthz`.
+
+**No rollback mechanism.** Download the previous tarball from its GitHub
+Release into `_build/prod/rel/freewhen/` and run `--tags deploy`. No state on
+disk cares which version wrote it.

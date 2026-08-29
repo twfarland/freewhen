@@ -5,9 +5,11 @@
   "scripts": {
     "build": "esbuild src/main.ts --bundle --format=esm --target=es2022 --minify --outfile=../apps/fw_web/priv/static/app.js",
     "watch": "esbuild src/main.ts --bundle --format=esm --target=es2022 --outfile=../apps/fw_web/priv/static/app.js --watch",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types \"src/*.test.ts\""
   },
   "devDependencies": {
+    "@types/node": "22.10.2",
     "esbuild": "0.25.10",
     "typescript": "5.9.3"
   },

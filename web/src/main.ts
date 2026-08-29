@@ -4,22 +4,23 @@
 // server when loading a page. The host token lives in localStorage and is
 // never in a URL at all.
 //
-// ## Coming back after a release
-//
-// The server keeps nothing across a restart, so recovery is the people in the
-// room handing back the pieces they were holding. On every connection this
-// client resubmits what it remembers; if the server says it has never heard of
-// this attendee, the room was rebuilt and it rejoins first. A host whose room
-// has gone entirely reopens it at the same address by presenting its token —
-// see docs/adr/0008.
+// Recovery is the people in the room handing back the pieces they were
+// holding. On every connection this client resubmits what it remembers; if the
+// server has never heard of this attendee, the room was rebuilt and it rejoins
+// first. A host whose room has gone entirely reopens it at the same address by
+// presenting its token.
 
 import { render } from 'lit'
+import { DEFAULT_HOURS, areHours } from './hours.ts'
+import type { Hours } from './hours.ts'
 import { download, invite } from './invite.ts'
 import { decodeMask, emptyMask, encodeMask, preset as presetMask, setSlot } from './mask.ts'
 import { recall, remember } from './memory.ts'
 import type { Memory } from './memory.ts'
 import { openRoom } from './protocol.ts'
 import type { Grid, RoomShape, ServerMessage } from './protocol.ts'
+import { accepted, errored, opened } from './session.ts'
+import type { Session } from './session.ts'
 import { connect } from './socket.ts'
 import type { Connection } from './socket.ts'
 import { app } from './view.ts'
@@ -36,15 +37,25 @@ function mount(): HTMLElement {
 const root = mount()
 const hash = location.hash.replace(/^#/, '') || undefined
 
+// Whether this browser has a place in the room outlives a reload, so it is
+// derived from what was stored rather than assumed false. session.ts has the
+// rules and the reason.
+const stored = hash === undefined ? {} : recall(hash)
+let session: Session = opened(stored.attendeeId)
+
 let state: State = {
   hash,
-  isHost: hash !== undefined && recall(hash).hostToken !== undefined,
+  isHost: stored.hostToken !== undefined,
   status: 'connecting',
   notice: '',
   busy: false,
   room: undefined,
   mine: undefined,
-  joined: false,
+  joined: session.joined,
+  alias: stored.alias,
+  // A stored preference from an older release, or a hand-edited one, must not
+  // be able to produce a preset that selects nothing.
+  hours: areHours(stored.hours) ? stored.hours : DEFAULT_HOURS,
 }
 
 let connection: Connection | undefined
@@ -67,21 +78,39 @@ const actions: Actions = {
     void create(form)
   },
 
+  // Aliases are how everyone else refers to you, so two of them in one room is
+  // ambiguous for the humans before it is ambiguous for the highlight below.
+  // Advisory only: the server does not enforce it yet, and two people joining
+  // at once can still collide.
   join: (alias) => {
+    if (state.room?.attendees.some((attendee) => attendee.alias === alias) === true) {
+      update({ notice: 'Somebody here is already called that — pick another name.' })
+      return
+    }
     if (state.hash !== undefined) remember(state.hash, { alias })
+    update({ alias })
     connection?.send({ type: 'join', alias })
   },
 
   preset: (kind) => {
     if (state.room === undefined) return
-    update({ mine: presetMask(state.room.grid, kind) })
+    update({ mine: presetMask(state.room.grid, kind, state.hours) })
     submit()
   },
 
-  paint: (slot, busy) => {
+  setHours: (hours: Hours) => {
+    if (!areHours(hours)) {
+      update({ notice: 'A day has to end after it starts.' })
+      return
+    }
+    if (state.hash !== undefined) remember(state.hash, { hours })
+    update({ hours, notice: '' })
+  },
+
+  paint: (slot, free) => {
     if (state.mine === undefined) return
     const mine = Uint8Array.from(state.mine)
-    setSlot(mine, slot, busy)
+    setSlot(mine, slot, free)
     update({ mine })
     submit()
   },
@@ -141,9 +170,9 @@ function submit(): void {
 function sendAvailability(): void {
   const { attendeeId } = memory()
   if (attendeeId === undefined || state.mine === undefined || state.hash === undefined) return
-  const busy = encodeMask(state.mine)
-  remember(state.hash, { busy })
-  connection?.send({ type: 'submit', attendeeId, busy })
+  const free = encodeMask(state.mine)
+  remember(state.hash, { free })
+  connection?.send({ type: 'submit', attendeeId, free })
 }
 
 // ---------- recovery ----------
@@ -172,9 +201,9 @@ async function resume(): Promise<void> {
 
 /** Hand back whatever this browser was holding. */
 function restore(): void {
-  const { attendeeId, busy } = memory()
-  if (attendeeId === undefined || busy === undefined) return
-  connection?.send({ type: 'submit', attendeeId, busy })
+  const { attendeeId, free } = memory()
+  if (attendeeId === undefined || free === undefined) return
+  connection?.send({ type: 'submit', attendeeId, free })
 }
 
 // ---------- messages ----------
@@ -190,8 +219,9 @@ function onMessage(message: ServerMessage): void {
       restore()
       return
     case 'joined':
+      session = accepted()
       if (state.hash !== undefined) remember(state.hash, { attendeeId: message.attendeeId })
-      update({ joined: true })
+      update({ joined: session.joined })
       sendAvailability()
       return
     case 'error':
@@ -204,19 +234,18 @@ function onMessage(message: ServerMessage): void {
   }
 }
 
-// The room was rebuilt without us, so take our place in it again rather than
-// showing an error nobody can act on.
 function onError(reason: string): void {
-  const { alias } = memory()
-  if (reason === 'unknown_attendee' && alias !== undefined) {
-    connection?.send({ type: 'join', alias })
+  const reaction = errored(session, reason, memory().alias)
+  session = reaction.session
+  if (reaction.rejoinAs !== undefined) {
+    connection?.send({ type: 'join', alias: reaction.rejoinAs })
     return
   }
-  update({ notice: readable(reason) })
+  update({ joined: session.joined, notice: readable(reason) })
 }
 
 function storedMask(grid: Grid): Uint8Array {
-  const stored = memory().busy
+  const stored = memory().free
   const decoded = stored === undefined ? undefined : decodeMask(stored, grid)
   return decoded ?? emptyMask(grid)
 }
@@ -230,6 +259,7 @@ function readable(reason: string): string {
     duplicate: 'You have already joined.',
     bad_alias: 'That name will not work — up to 32 ordinary characters, please.',
     bad_slot: 'That availability did not match this room. Reload and try again.',
+    too_fragmented: 'That is too many separate blocks — try marking longer stretches.',
     unknown_attendee: 'You are not in this room any more. Reload to rejoin.',
   }
   return messages[reason] ?? reason

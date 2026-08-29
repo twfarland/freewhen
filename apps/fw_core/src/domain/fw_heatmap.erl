@@ -3,11 +3,10 @@
 How many attendees are free in each slot, and which windows are worth meeting
 in.
 
-The aggregate is the *only* availability the server ever publishes. A count of
-three says three people are free at ten o'clock; it does not say which three,
-and no sequence of counts can be run backwards to a particular person's diary
-unless they are the only attendee — which is why a room with one attendee has
-nothing to reveal.
+The aggregate is the *only* availability the server publishes. A count of three
+says three people are free at ten; it never says which three, and no sequence
+of counts runs backwards to one person's diary unless they are the only
+attendee — which is why a room of one has nothing to reveal.
 """.
 
 -export([counts/2, windows/3, best/2]).
@@ -45,7 +44,7 @@ best(Windows, Limit) ->
 %%% ---- internal ----
 
 free_at(Slot, Availabilities) ->
-    length([free || Busy <- Availabilities, not fw_availability:busy_at(Slot, Busy)]).
+    length([free || Free <- Availabilities, fw_availability:free_at(Slot, Free)]).
 
 lowest(Counts, Start, Length) ->
     lists:min(lists:sublist(Counts, Start + 1, Length)).

@@ -173,7 +173,7 @@ every_watcher_sees_a_change(Config) ->
 answering_updates_the_heatmap_and_the_proposals(Config) ->
     {Socket, _Hash, _Token} = watched(Config),
     {Id, _Announced} = joined_as(Socket, <<"Blue Falcon">>),
-    fw_ws_client:submit(Socket, Id, busy([1, 2])),
+    fw_ws_client:submit(Socket, Id, free([0, 3, 4, 5, 6, 7])),
     Room = state(Socket),
     ?assertEqual([1, 0, 0, 1, 1, 1, 1, 1], maps:get(<<"heatmap">>, Room)),
     ?assertMatch([#{<<"alias">> := <<"Blue Falcon">>, <<"ready">> := true}],
@@ -185,7 +185,7 @@ answering_updates_the_heatmap_and_the_proposals(Config) ->
 a_proposal_carries_utc_instants(Config) ->
     {Socket, _Hash, _Token} = watched(Config),
     {Id, _Announced} = joined_as(Socket, <<"Blue Falcon">>),
-    fw_ws_client:submit(Socket, Id, busy([1, 2])),
+    fw_ws_client:submit(Socket, Id, free([0, 3, 4, 5, 6, 7])),
     Proposal = hd(maps:get(<<"proposals">>, state(Socket))),
     ?assertEqual(3 * 900_000, maps:get(<<"startsAt">>, Proposal)),
     ?assertEqual(5 * 900_000, maps:get(<<"endsAt">>, Proposal)),
@@ -298,7 +298,7 @@ joined_as(Socket, Alias) ->
     #{<<"attendeeId">> := Id} = fw_ws_client:recv(Socket),
     {Id, state(Socket)}.
 
-busy(Slots) ->
+free(Slots) ->
     Bits = <<<<(bit(lists:member(Slot, Slots))):1>> || Slot <- lists:seq(0, 7)>>,
     base64:encode(Bits, #{mode => urlsafe, padding => false}).
 

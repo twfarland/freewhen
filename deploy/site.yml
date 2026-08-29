@@ -1,0 +1,252 @@
+---
+# FreeWhen on one machine.
+#
+#   ansible-playbook -i inventory.ini deploy/site.yml                # all of it
+#   ansible-playbook -i inventory.ini deploy/site.yml --tags deploy  # ship and restart
+#   ansible-playbook -i inventory.ini deploy/site.yml --tags reload  # ship, no restart
+#
+# `reload` swaps the changed modules into the running node without dropping a
+# single websocket. It refuses when that would not be safe. Read the comment
+# above the task before using it — it is not a release upgrade.
+#
+# The whole playbook is idempotent, so there is no separate provisioning script
+# to remember and nothing to keep in sync with it. A full run against a bare
+# Ubuntu 24.04 box produces a working, TLS-terminated, self-patching server;
+# a run against a live one changes nothing unless the release changed.
+#
+# There is nothing on this host to back up. The only file it writes is a DETS
+# snapshot of rooms, none of which outlive the meeting they arrange, and
+# rebuilding the machine
+# from scratch with this playbook takes a few minutes.
+
+- name: FreeWhen
+  hosts: freewhen
+  become: true
+
+  vars:
+    home: /opt/freewhen
+    data: /var/lib/freewhen
+    port: 8080
+    memory_max: 1536M
+
+  handlers:
+    - name: reload caddy
+      ansible.builtin.systemd:
+        name: caddy
+        state: reloaded
+
+  tasks:
+    - name: This must be the distribution the release was built on
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version == '24.04'
+        fail_msg: >-
+          The release bundles ERTS and is linked against the glibc of whatever
+          built it. Build and run on the same Ubuntu, or the node will not
+          start. CI pins ubuntu-24.04 for this reason.
+      tags: [provision, deploy, reload]
+
+    # ---- the machine ----
+
+    - name: Packages
+      ansible.builtin.apt:
+        name:
+          # ERTS is bundled, so there is no Erlang here — only what it links to.
+          - libncurses6
+          - libssl3
+          - unattended-upgrades
+          - ufw
+          - debian-keyring
+          - debian-archive-keyring
+          - apt-transport-https
+          - curl
+        update_cache: true
+        cache_valid_time: 3600
+      tags: provision
+
+    - name: Security updates apply themselves
+      ansible.builtin.template:
+        src: templates/52freewhen.j2
+        dest: /etc/apt/apt.conf.d/52freewhen
+        mode: "0644"
+      tags: provision
+
+    - name: Caddy's signing key
+      ansible.builtin.get_url:
+        url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+        dest: /etc/apt/keyrings/caddy-stable.asc
+        mode: "0644"
+      tags: provision
+
+    - name: Caddy's repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/etc/apt/keyrings/caddy-stable.asc]
+          https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
+        filename: caddy-stable
+      tags: provision
+
+    - name: Caddy
+      ansible.builtin.apt:
+        name: caddy
+        update_cache: true
+      tags: provision
+
+    # The apt packages enable these themselves, but "comes back from a reboot
+    # with nobody watching" is the requirement, so it is asserted rather than
+    # assumed.
+    - name: Everything that must survive a reboot starts itself
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - caddy
+        - unattended-upgrades
+      tags: provision
+
+    # 8080 is deliberately absent: the node binds to loopback and Caddy is the
+    # only way in. Hetzner's own cloud firewall is worth setting up as well —
+    # it drops packets before they reach the machine — but this playbook does
+    # not depend on it.
+    - name: Deny everything inbound that is not SSH or HTTP
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["22", "80", "443"]
+      tags: provision
+
+    - name: Turn the firewall on
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+      tags: provision
+
+    # ---- where it lives ----
+
+    - name: A user that owns a release and one file, and cannot log in
+      ansible.builtin.user:
+        name: freewhen
+        system: true
+        home: "{{ home }}"
+        shell: /usr/sbin/nologin
+        create_home: false
+      tags: provision
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: freewhen
+        group: freewhen
+        mode: "{{ item.mode }}"
+      loop:
+        # 0700 because the snapshot holds aliases and availability at rest.
+        - {path: "{{ home }}", mode: "0755"}
+        - {path: "{{ home }}/current", mode: "0755"}
+        - {path: "{{ data }}", mode: "0700"}
+      tags: provision
+
+    - name: The service
+      ansible.builtin.template:
+        src: templates/freewhen.service.j2
+        dest: /etc/systemd/system/freewhen.service
+        mode: "0644"
+      register: unit
+      tags: provision
+
+    - name: The proxy's configuration
+      ansible.builtin.template:
+        src: templates/Caddyfile.j2
+        dest: /etc/caddy/Caddyfile
+        mode: "0644"
+      notify: reload caddy
+      tags: provision
+
+    # ---- the code ----
+
+    # rebar.config is the single source of truth for the version, so the
+    # tarball is discovered rather than named. Exactly one, or something is
+    # stale — CI checks that a v-tag agrees with rebar.config separately.
+    - name: Find the release tarball
+      ansible.builtin.set_fact:
+        tarballs: >-
+          {{ query('fileglob',
+                   playbook_dir + '/../_build/prod/rel/freewhen/freewhen-*.tar.gz') }}
+      tags: [deploy, reload]
+
+    - name: There must be exactly one
+      ansible.builtin.assert:
+        that: tarballs | length == 1
+        fail_msg: >-
+          Found {{ tarballs | length }} tarballs in _build/prod/rel/freewhen.
+          Build one on Ubuntu 24.04 with
+          `(cd web && npm ci && npm run build) && rebar3 as prod tar`,
+          and `rm -rf _build/prod` first if an old version is lingering.
+      tags: [deploy, reload]
+
+    # unarchive compares the archive against what is on disk and reports
+    # changed only when it differs, so running this playbook to fix a firewall
+    # rule does not drop every open websocket.
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ tarballs[0] }}"
+        dest: "{{ home }}/current"
+        owner: freewhen
+        group: freewhen
+      register: unpacked
+      tags: [deploy, reload]
+
+    # Explicit, and deliberately not a handler: under --tags reload this task
+    # must not run, and that is far easier to see here than in handler tag
+    # semantics. A restart is a stop and a start with nothing overlapping,
+    # which is what the snapshot exists for — rooms are written down on the way
+    # out and read back before the listener opens.
+    - name: Restart into it
+      ansible.builtin.systemd:
+        name: freewhen
+        state: restarted
+        daemon_reload: true
+      when: (unit.changed | default(false)) or (unpacked.changed | default(false))
+      tags: [provision, deploy]
+
+    - name: Run it, and again at boot
+      ansible.builtin.systemd:
+        name: freewhen
+        state: started
+        enabled: true
+        daemon_reload: true
+      tags: [provision, deploy]
+
+    # ---- or the same code, without stopping ----
+    #
+    # Only reached under --tags reload, and only good for changed function
+    # bodies. It does NOT migrate gen_server state: change the shape of
+    # fw_room_server's record and the new code meets the old state, which
+    # crashes that room. Rooms are `temporary`, so the blast radius is one
+    # room rather than the node, but a restart is the honest answer to
+    # anything structural. This is not a release upgrade.
+    - name: Swap the changed modules into the running node
+      ansible.builtin.command:
+        argv:
+          - "{{ home }}/current/bin/freewhen"
+          - eval
+          # soft_purge refuses rather than killing a process still running the
+          # previous version, so a failure here means "restart instead".
+          - >-
+            M = code:modified_modules(),
+            true = lists:all(fun(Mod) -> code:soft_purge(Mod) end, M),
+            ok = code:atomic_load(M),
+            M.
+      become_user: freewhen
+      register: reloaded
+      changed_when: reloaded.stdout != "[]"
+      tags: reload
+
+    - name: What was swapped
+      ansible.builtin.debug:
+        msg: "reloaded {{ reloaded.stdout }}"
+      tags: reload

@@ -9,6 +9,7 @@
 //
 // It lives in localStorage, which never leaves this machine.
 
+import type { Hours } from './hours.ts'
 import type { RoomShape } from './protocol.ts'
 
 export type Memory = {
@@ -16,10 +17,12 @@ export type Memory = {
   hostToken?: string
   alias?: string
   attendeeId?: string
-  /** Base64url packed bits, exactly as sent. */
-  busy?: string
+  /** Base64url packed free-time bits, exactly as sent. */
+  free?: string
   /** Enough to rebuild the same room after the server has forgotten it. */
   shape?: RoomShape
+  /** This person's working day, if it is not nine to five. */
+  hours?: Hours
 }
 
 const PREFIX = 'freewhen:'

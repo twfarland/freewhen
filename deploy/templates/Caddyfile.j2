@@ -1,0 +1,11 @@
+# Managed by deploy/site.yml. Edits here are overwritten.
+#
+# Caddy is here for one reason: it obtains and renews the TLS certificate for
+# this name by itself, which is the single largest piece of sysadmin this
+# deployment would otherwise own. Websockets need no configuration — the
+# upgrade is proxied as it is.
+
+{{ domain }} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:{{ port }}
+}

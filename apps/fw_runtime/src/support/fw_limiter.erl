@@ -2,7 +2,8 @@
 -moduledoc """
 Rate limiting for room creation, one token bucket per caller.
 
-Creating a room costs memory that lives for a day, so this is the one endpoint
+Creating a room costs memory that lives as long as the room does, so this is
+the one endpoint
 where an unauthenticated stranger can make the server hold something. The
 bucket is what stops a loop from turning that into an outage.
 

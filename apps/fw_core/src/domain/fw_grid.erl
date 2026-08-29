@@ -9,7 +9,7 @@ browser converts it against its own locale.
 """.
 
 -export([new/3, starts_at/1, slot_minutes/1, slots/1]).
--export([is_slot/2, is_window/3, slot_start/2, window/3]).
+-export([is_slot/2, is_window/3, window/3]).
 -export_type([t/0, slot/0, millisecond/0, error/0]).
 
 -type millisecond() :: non_neg_integer().
@@ -23,7 +23,7 @@ browser converts it against its own locale.
 }.
 
 %% One week at five-minute resolution. The ceiling exists because a room holds
-%% one slot per attendee per bit, and an unbounded grid is an unbounded room.
+%% availability per attendee, and an unbounded grid is an unbounded room.
 -define(MAX_SLOTS, 2016).
 -define(MAX_SLOT_MINUTES, 1440).
 

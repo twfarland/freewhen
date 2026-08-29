@@ -3,26 +3,30 @@
 Find a time to meet with people outside your organisation, without either side
 signing up for anything or leaving a record.
 
-Everyone marks when they are busy, as one bit per fifteen minutes. The server
-intersects the bits in memory, shows how many people are free in each slot —
-never which people — and deletes the room when it is done. There is no
-database, so there is nothing to leak, export, subpoena or forget to delete.
+Everyone drags across a grid to say when they are free, a quarter hour at a
+time. The server intersects the answers in memory, shows how many people are
+free in each slot — never which people — and deletes the room once the meeting
+is settled. There are no accounts and no database, and nothing about a meeting
+outlives the arranging of it.
 
 ## How it works
 
 1. Someone creates a room and gets a link. No account.
 2. Everyone opens the link and picks a name others will recognise —
    "Blue Falcon", not their own.
-3. Each person clicks a preset — "only weekdays 9–5" is usually right — then
-   drags across the grid to fix the exceptions. Only a bitmask is sent.
+3. Each person clicks a preset — "weekdays 9–5", and the hours are theirs to
+   set — then drags across the grid to fix the exceptions, or arrows around it
+   and presses space. Only packed bits go over the wire.
 4. The heatmap shows how many people are free in each slot, in each viewer's
    own timezone. It never shows *which* people. Every suggested time is
    labelled in everyone's local time, so nobody has to do the arithmetic.
 5. Whoever created the room picks a slot and everyone downloads an invitation
    with a video link in it.
-6. The room deletes itself — minutes after a time is chosen, or 24 hours after
-   it was created, whichever comes first. Deploying the server does not count:
-   rooms are snapshotted locally so a release does not take them with it.
+6. The room deletes itself once a time is chosen, or after a month with nobody
+   touching it. Every change resets that month — arranging a meeting between
+   organisations really can take weeks, and a room that expired mid-negotiation
+   would be worse than useless. Deploying the server does not count: rooms are
+   snapshotted locally so a release does not take them with it.
 
 ## What the server never sees
 
@@ -30,65 +34,94 @@ Your email address, your name, or your calendar. There is no calendar
 integration at all — no API, no file import — so there is no claim about
 calendar data for you to have to trust.
 
-It does keep **your timezone**, because scheduling across timezones needs it:
-"Tuesday at 10:00" is not an answer when half the room is on another continent.
-That is the only thing it knows about a person, it is weaker than the IP
-address your connection already reveals, and it is gone with the room.
+Not even your timezone. Every instant it holds is UTC, and turning one into
+"Tuesday at 10:00" happens in your browser against your own locale, so there is
+nothing on the server that says where anybody is.
 
-Everything the server holds is a random room hash, a chosen alias per person,
-and a set of busy slots. It is kept in RAM, and mirrored to one local file so
-that deploying does not destroy your meeting — that file is deleted per room
-the moment the room ends, and nothing in it outlives the day. It is the only
-thing written anywhere.
+Everything it holds is a random room hash, a chosen alias per person, and the
+stretches of time they said they were free. It is kept in RAM and mirrored to
+one local file so a deploy or a reboot does not destroy your meeting — the only
+thing written anywhere, deleted per room the moment the room ends.
 
-It also never learns *who* is free when. Every watcher sees how many people are
-free in a slot and nothing more, which is the one thing When2meet and Doodle
-will always tell you.
+Be clear about what that means: a room lives until the meeting is settled, or a
+month with nobody touching it. So the honest claim is **nothing outlives the
+arranging of the meeting**, not "nothing outlives the day". Coordination
+genuinely takes weeks sometimes, and pretending otherwise would just mean
+losing people's rooms.
+
+**No other participant** learns who is free when. The server has to hold each
+person's answer in order to add them up — it is not zero-knowledge and does not
+claim to be — but a person's own row is never published, never logged, and
+never outlives the room. Every watcher, the host included, sees how many people
+are free in a slot and nothing more, which is the one thing When2meet and
+Doodle will always tell you.
 
 ## Running it
 
-Needs Erlang/OTP 27, rebar3 and Node 22.
+Needs Erlang/OTP 27, rebar3 and Node 22. Nothing else — no services, no
+containers, no disk.
 
 ```sh
-cd web && npm ci && npm run build   # build the client
-cd .. && rebar3 shell               # http://localhost:8080
+cd web && npm ci && npm run watch   # terminal 1: rebuild the client on save
+rebar3 shell                        # terminal 2: http://localhost:8080
 ```
+
+Recompile a server change from inside the shell with `r3:do(compile)`, which
+swaps the changed modules into the running node. Rooms live in the shell's
+memory and go when it does. [docs/DEVELOPING.md](docs/DEVELOPING.md) has the
+rest, including how to exercise the durability path locally.
 
 ## Checks
 
 ```sh
 rebar3 do compile, eunit, ct, xref, dialyzer
-cd web && npm run check
+cd web && npm run check && npm test
 ```
 
 Warnings are errors, every export has a spec, and dialyzer and xref must be
-clean. 90 unit tests and 18 integration tests over real sockets.
+clean. 102 unit tests and 26 integration tests over real sockets on the server,
+56 in the browser with no test framework.
 
 ## Deploying
 
+One Hetzner box, no containers, one Ansible playbook that provisions the
+machine and ships to it.
+
 ```sh
-fly deploy
+cd web && npm ci && npm run build && cd ..
+rebar3 as prod tar
+ansible-playbook -i deploy/inventory.ini deploy/site.yml
 ```
 
-A deploy destroys every room process, and the rooms come back by themselves:
-a room's address is derived from its host's token, so the host's browser
-reopens it and everyone resubmits what their own browser was holding. Nothing
-is written to disk to make that work.
+Caddy gets the certificate, systemd keeps the node up, `unattended-upgrades`
+patches the OS, and `ufw` closes everything else. Everything is enabled at
+boot, so the machine comes back on its own — `deploy/reboot.yml` is the drill
+that proves it. The release bundles its own ERTS, so the server has no Erlang
+on it, but it must be built on the same Ubuntu; both CI and the playbook check
+that.
+
+`--tags reload` swaps changed modules into the running node without dropping a
+socket, for a hotfix worth not interrupting anyone over.
+
+A deploy stops the node and starts it again. The rooms survive because they
+are snapshotted locally and read back before the listener opens; if that file
+is gone, a room's address is derived from its host's token, so the host's
+browser reopens it and everyone resubmits what their own browser held.
 
 One machine, deliberately — a room lives in the memory of the process that
-created it. Set `FW_ALLOWED_ORIGINS` before making a deployment public. See
-[docs/OPERATIONS.md](docs/OPERATIONS.md).
+created it. [docs/OPERATIONS.md](docs/OPERATIONS.md) is the rest.
 
 ## Reading it
 
 | | |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the three layers, what each owns, and the protocol |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the layers, the supervision tree, the protocol, and every decision |
+| [docs/DEVELOPING.md](docs/DEVELOPING.md) | the local loop, the checks, and the guardrails |
 | [docs/PLAN.md](docs/PLAN.md) | what is built, what is next, and the known limits |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md) | running, deploying, and what failure looks like |
-| [docs/adr/](docs/adr/) | the decisions, and what each one cost |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | deploying, watching, and what failure looks like |
 | [CLAUDE.md](CLAUDE.md) | the rules the code is held to |
 
-About 1,170 lines of Erlang and 735 of TypeScript, plus 815 lines of tests.
-Two dependencies: cowboy on the server, Lit in the browser. Staying that size
-is the design constraint, not a stage it is passing through.
+About 1,225 lines of Erlang and 900 of TypeScript, plus 1,245 lines of tests
+and 470 of Ansible. Two runtime dependencies: cowboy on the server, Lit in the
+browser. Staying that size is the design constraint, not a stage it is passing
+through.

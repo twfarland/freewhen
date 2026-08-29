@@ -44,8 +44,7 @@ export type ServerMessage =
 
 export type ClientMessage =
   | { type: 'join'; alias: string }
-  | { type: 'submit'; attendeeId: string; busy: string }
-  | { type: 'leave'; attendeeId: string }
+  | { type: 'submit'; attendeeId: string; free: string }
   | { type: 'pick'; hostToken: string; slot: number }
 
 export type RoomShape = {

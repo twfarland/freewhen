@@ -1,0 +1,3 @@
+# Only needed on ansible-core. The `ansible` pip package already bundles this.
+collections:
+  - name: community.general

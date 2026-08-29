@@ -2,20 +2,17 @@
 -moduledoc """
 One connection, one room.
 
-The hash is taken from the path and resolved **before** the upgrade, so a link
-to a room that has expired fails as an honest 404 rather than as a socket that
-opens and then says nothing. Resolving before upgrading is also what keeps this
-handler from being a way to create rooms: it only ever finds one that already
-exists, and creating costs a day of memory and lives behind the rate-limited
-`POST /api/rooms`.
+The hash is resolved from the path **before** the upgrade, so an expired room
+fails as an honest 404 rather than a socket that opens and says nothing — and
+so this handler can only ever find a room, never create one. Creating costs a
+day of memory and lives behind the rate-limited `POST /api/rooms`.
 
-A successful command sends no reply of its own. The change it caused arrives as
-the next `state` message, which every watcher gets including the sender, so
-there is exactly one way for a client to learn what happened. Only failures and
-the id handed back by joining need a direct answer.
+A successful command sends no reply of its own: the change arrives as the next
+`state`, which every watcher gets including the sender. Only failures and the
+id handed back by joining need a direct answer.
 
 Nothing here logs a frame or a path. The hash is the capability that opens the
-room, and a log file is the one place it must never appear.
+room, and a log is the one place it must never appear.
 """.
 
 -behaviour(cowboy_websocket).

@@ -6,7 +6,7 @@
   --muted: #6b7280;
   --line: #e3e3e0;
   --accent: #2f6f4f;
-  --busy: #c2410c;
+  --mine: #1d4ed8;
   color-scheme: light dark;
 }
 
@@ -17,7 +17,7 @@
     --muted: #9aa0aa;
     --line: #2c2f36;
     --accent: #6fcf97;
-    --busy: #f97316;
+    --mine: #93c5fd;
   }
 }
 
@@ -133,6 +133,22 @@ li {
   margin: 0.2rem 0;
 }
 
+/* Which of these is you. The list carries no ids by design, so this matches on
+   the alias — and the client refuses to join under one already in the room. */
+li.you {
+  font-weight: 600;
+}
+
+.tag {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 0.75em;
+  font-weight: 500;
+}
+
 li.waiting {
   color: var(--muted);
   font-style: italic;
@@ -185,17 +201,26 @@ li.waiting {
   background: color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line));
 }
 
+/* The grid is one tab stop with a roving tabindex, so the focused cell has to
+   be unmistakable — the default outline vanishes against a shaded heatmap. */
+.slot:focus-visible {
+  outline: 2px solid CanvasText;
+  outline-offset: -2px;
+  z-index: 1;
+}
+
 .slot.everyone {
   outline: 1px solid var(--accent);
 }
 
-.slot.busy {
+/* Your own answer, drawn over the shading so you can see what you offered. */
+.slot.mine {
   background: repeating-linear-gradient(
     45deg,
-    var(--busy),
-    var(--busy) 2px,
-    transparent 2px,
-    transparent 4px
+    var(--mine),
+    var(--mine) 2px,
+    color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line)) 2px,
+    color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line)) 4px
   );
 }
 

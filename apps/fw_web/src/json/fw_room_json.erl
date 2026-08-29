@@ -2,39 +2,24 @@
 -moduledoc """
 The translation between a room and what goes over the socket.
 
-The whole of FreeWhen's JSON knowledge, deliberately in one module: the domain
-has no idea it is being published, and the transport has no idea what it is
-publishing.
-
-## The protocol
-
-Four messages in, four out, and no correlation ids — a connection watches
-exactly one room, and the only reply anyone waits for is the id they get back
-from joining.
+The whole of FreeWhen's JSON knowledge, in one module: the domain has no idea
+it is being published and the transport has no idea what it is publishing.
 
     client -> server                        server -> client
     {type: join,   alias}                   {type: state,  room}
-    {type: submit, attendeeId, busy}        {type: joined, attendeeId}
-    {type: leave,  attendeeId}              {type: error,  reason}
-    {type: pick,   hostToken, slot}         {type: closed, reason}
+    {type: submit, attendeeId, free}        {type: joined, attendeeId}
+    {type: pick,   hostToken, slot}         {type: error,  reason}
+                                            {type: closed, reason}
 
-Every change sends the whole room, already computed. A snapshot is about a
-kilobyte and a room has a handful of participants, so the bandwidth a diff
-would save is not worth the machinery on both sides.
+No correlation ids: a connection watches one room, and the only reply anyone
+waits for is the id they get back from joining. Every change sends the whole
+room already computed — a snapshot is about a kilobyte, so what a diff would
+save is not worth the machinery on both sides. Proposals carry UTC instants
+rather than slot numbers, leaving the browser nothing to do but format.
 
-## What the browser is left to do
-
-Formatting, and only formatting. Proposals carry UTC instants rather than slot
-numbers, so the browser converts them to local time with the timezone database
-it already has and does no arithmetic of its own. The server holds no
-timezone for anybody.
-
-## What is deliberately absent
-
-Attendee ids are **not** in a snapshot. An id is a capability — whoever holds
-one may replace that person's availability — so publishing the list would let
-any participant impersonate any other. A client learns its own id once, as the
-reply to its own join.
+**Attendee ids are never published.** An id is a capability, so putting the
+list in a snapshot would let any participant impersonate any other. A client
+learns its own once, as the reply to its own join.
 """.
 
 -export([state/1, joined/1, error/1, closed/1, command/1]).
@@ -66,12 +51,10 @@ command(Frame) ->
 
 decode(#{<<"type">> := <<"join">>, <<"alias">> := Alias}) when is_binary(Alias) ->
     {ok, {join, Alias}};
-decode(#{<<"type">> := <<"submit">>, <<"attendeeId">> := Id, <<"busy">> := Busy}) when
-    is_binary(Id), is_binary(Busy)
+decode(#{<<"type">> := <<"submit">>, <<"attendeeId">> := Id, <<"free">> := Free}) when
+    is_binary(Id), is_binary(Free)
 ->
-    submitted(Id, Busy);
-decode(#{<<"type">> := <<"leave">>, <<"attendeeId">> := Id}) when is_binary(Id) ->
-    {ok, {leave, Id}};
+    submitted(Id, Free);
 decode(#{<<"type">> := <<"pick">>, <<"hostToken">> := Token, <<"slot">> := Slot}) when
     is_binary(Token), is_integer(Slot)
 ->
@@ -79,9 +62,9 @@ decode(#{<<"type">> := <<"pick">>, <<"hostToken">> := Token, <<"slot">> := Slot}
 decode(_Unrecognised) ->
     {error, <<"unrecognised message">>}.
 
-submitted(Id, Busy) ->
-    case fw_busy_codec:decode(Busy) of
-        {ok, BusySlots} -> {ok, {submit, Id, BusySlots}};
+submitted(Id, Free) ->
+    case fw_slot_bits:decode(Free) of
+        {ok, FreeSlots} -> {ok, {submit, Id, FreeSlots}};
         {error, Why} -> {error, Why}
     end.
 
@@ -92,9 +75,9 @@ room(Room) ->
         <<"grid">> => grid(fw_room:grid(Room)),
         <<"durationSlots">> => fw_room:duration_slots(Room),
         <<"attendees">> => [attendee(A) || A <- fw_room:attendees(Room)],
-        <<"heatmap">> => fw_room:heatmap(Room),
-        <<"proposals">> => [proposal(P) || P <- fw_room:proposals(Room)],
-        <<"chosen">> => chosen(fw_room:chosen(Room)),
+        <<"heatmap">> => fw_schedule:heatmap(Room),
+        <<"proposals">> => [proposal(P) || P <- fw_schedule:proposals(Room)],
+        <<"chosen">> => chosen(fw_schedule:chosen(Room)),
         <<"expiresAt">> => fw_room:expires_at(Room)
     }.
 

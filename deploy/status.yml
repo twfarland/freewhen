@@ -1,0 +1,72 @@
+---
+# What the machine is doing, without touching it.
+#
+#   ansible-playbook -i inventory.ini deploy/status.yml
+#
+# Read-only: every task here gathers, none of them change anything. This is the
+# first thing to run when something looks wrong, and it answers the reboot
+# question too — a service that is not `enabled` will not come back at 04:00.
+
+- name: FreeWhen status
+  hosts: freewhen
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Services
+      ansible.builtin.command: systemctl show {{ item }} -p ActiveState -p UnitFileState -p NRestarts
+      changed_when: false
+      register: services
+      loop: [freewhen, caddy, ufw, unattended-upgrades]
+
+    - name: Health, from the machine itself
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/healthz
+        return_content: true
+      register: health
+      failed_when: false
+
+    - name: Health, from outside, over TLS
+      ansible.builtin.uri:
+        url: https://{{ domain }}/healthz
+        return_content: true
+      register: public
+      failed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: The snapshot
+      ansible.builtin.stat:
+        path: /var/lib/freewhen/rooms.dets
+      register: snapshot
+
+    # Everything the node will say about itself. Deliberately aggregate: there
+    # is no per-room number here, because a list of rooms is the one thing this
+    # design promises not to keep.
+    - name: The node
+      ansible.builtin.command:
+        argv:
+          - /opt/freewhen/current/bin/freewhen
+          - eval
+          - >-
+            {erlang:memory(total) div 1048576,
+             erlang:system_info(process_count),
+             element(1, erlang:statistics(wall_clock)) div 1000}.
+      become_user: freewhen
+      changed_when: false
+      register: node
+      failed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ services.results
+             | map(attribute='stdout')
+             | map('replace', '\n', ' ')
+             | list }}
+          | disk free on /: {{ (ansible_mounts | selectattr('mount', 'eq', '/') | first).size_available
+                                | human_readable }}
+          | snapshot: {{ (snapshot.stat.size | human_readable) if snapshot.stat.exists else 'absent (durability is OFF)' }}
+          | local healthz: {{ health.content | default('unreachable') }}
+          | public healthz: {{ public.content | default('unreachable') }}
+          | node {MiB, processes, uptime_s}: {{ node.stdout | default('unreachable') }}

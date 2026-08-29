@@ -1,28 +1,21 @@
 -module(fw_rooms).
 -moduledoc """
-Opening, finding and restoring rooms: the runtime's front door, and the only
-way a room comes into existence.
+Opening, finding and restoring rooms: the only way one comes into existence.
 
-Not reachable from the websocket. Creating costs a day of memory and must be
-rate limited and capped; finding an existing room costs nothing, so the socket
+Creating is not reachable from the websocket. It costs memory for as long as
+the room stays in use, and must
+be rate limited and capped, whereas finding costs nothing — so the socket
 handler resolves hashes and never creates.
 
-## Coming back
+Three ways back, in the order they apply: `restore/0` at boot brings back every
+room the snapshot store holds; `resume/2` reopens one from its host token when
+that store was empty or lost; `create/1` mints a new one. Both derive the hash
+the same way, so a room returns to the same address, and resuming a live room
+is a no-op — a client can call it whenever the room seems missing without
+knowing why.
 
-Three mechanisms, in the order they apply. `restore/0` runs at boot and brings
-back every room the snapshot store still holds, which covers an ordinary
-release. `resume/2` reopens a room from its host token, which covers a
-snapshot store that was empty or lost. `create/1` mints a new one.
-
-`create/1` derives the hash from a fresh token; `resume/2` derives it from a
-token the caller already holds. Same derivation, so the same room comes back at
-the same address — see `docs/adr/0008`. Resuming a live room is a no-op that
-returns the same answer, so a client can call it whenever the room seems
-missing without knowing why.
-
-The host token is returned once per call and never stored anywhere it can be
-read back. Losing it loses both the right to pick a slot and the ability to
-resume.
+The host token is returned once per call and stored nowhere it can be read
+back. Losing it loses both the right to pick and the ability to resume.
 """.
 
 -export([create/1, resume/2, find/1, count/0, restore/0]).
@@ -97,7 +90,7 @@ build(Hash, Token, #{grid := Grid, duration_slots := Duration}, Settings) ->
         duration_slots => Duration,
         host_token => Token,
         capacity => maps:get(max_attendees_per_room, Settings),
-        ttl_ms => maps:get(room_ttl_ms, Settings)
+        idle_ms => maps:get(room_idle_ms, Settings)
     },
     case fw_room:new(Params, fw_clock:now_ms()) of
         {ok, Room} -> opened(Hash, Token, Room, Settings);

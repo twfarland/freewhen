@@ -1,0 +1,10 @@
+// Managed by deploy/site.yml. Edits here are overwritten.
+//
+// Security updates apply themselves, and the machine reboots for a kernel that
+// needs it. That reboot is only affordable because rooms are snapshotted to
+// {{ data }} and restored at boot. With snapshots off it would silently
+// destroy every meeting in progress at 04:00.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";

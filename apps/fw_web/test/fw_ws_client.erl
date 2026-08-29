@@ -32,8 +32,8 @@ close({Pid, _Stream}) -> gun:close(Pid).
 join(Socket, Alias) ->
     send(Socket, #{<<"type">> => <<"join">>, <<"alias">> => Alias}).
 
-submit(Socket, Id, Busy) ->
-    send(Socket, #{<<"type">> => <<"submit">>, <<"attendeeId">> => Id, <<"busy">> => Busy}).
+submit(Socket, Id, Free) ->
+    send(Socket, #{<<"type">> => <<"submit">>, <<"attendeeId">> => Id, <<"free">> => Free}).
 
 pick(Socket, Token, Slot) ->
     send(Socket, #{<<"type">> => <<"pick">>, <<"hostToken">> => Token, <<"slot">> => Slot}).

@@ -2,17 +2,21 @@
 -moduledoc """
 The aggregate: one scheduling room, and every rule about what may happen to it.
 
-A room is closed to changes once it expires or once a slot is picked. Picking
-is the host's alone, proved by a token rather than an identity — the room knows
-nothing about who the host is, only that they hold the secret it was made with.
+A room lives on **idleness, not age**. Every change pushes its deadline out by
+`idle_ms`, because coordinating a meeting across organisations can take weeks
+and a room that dies mid-negotiation is worse than useless. It closes when a
+slot is picked, or when nobody has touched it for that long.
 
-Everything a client displays is computed here and published whole. The browser
-formats; it does not decide.
+Picking is the host's alone, proved by a token rather than an identity — the
+room knows nothing about who the host is, only that they hold the secret it was
+made with.
+
+What a client *displays* is `fw_schedule`; this module is only the rules.
 """.
 
--export([new/2, join/4, submit/4, leave/2, pick/4]).
+-export([new/2, join/4, submit/4, pick/4]).
 -export([grid/1, duration_slots/1, expires_at/1, picked/1, is_expired/2]).
--export([attendees/1, heatmap/1, proposals/1, chosen/1]).
+-export([attendees/1]).
 -export([to_binary/1, from_binary/1]).
 -export_type([t/0, params/0, token/0, error/0]).
 
@@ -23,7 +27,7 @@ formats; it does not decide.
     duration_slots := pos_integer(),
     host_token := token(),
     capacity := pos_integer(),
-    ttl_ms := pos_integer()
+    idle_ms := pos_integer()
 }.
 
 -type error() ::
@@ -35,16 +39,16 @@ formats; it does not decide.
     duration_slots := pos_integer(),
     host_token := token(),
     capacity := pos_integer(),
+    idle_ms := pos_integer(),
     attendees := #{fw_attendee:id() => fw_attendee:t()},
     order := [fw_attendee:id()],
     picked := fw_grid:slot() | undefined,
     expires_at := fw_grid:millisecond()
 }.
 
--define(MAX_PROPOSALS, 5).
 %% Bump when the shape above changes: a snapshot written by an older release
 %% must be discarded rather than misread.
--define(SNAPSHOT, fw_room_v1).
+-define(SNAPSHOT, fw_room_v2).
 
 %%% ---- construction ----
 
@@ -61,23 +65,18 @@ new(#{grid := Grid, duration_slots := Duration} = Params, Now) ->
     {ok, t()} | {error, error()}.
 join(Id, Alias, Now, Room) ->
     case open(Now, Room) of
-        ok -> admit(Id, Alias, Now, Room);
+        ok -> extended(admit(Id, Alias, Room), Now);
         {error, Reason} -> {error, Reason}
     end.
 
--doc "Record when an attendee is busy, as the slots they cannot meet in.".
+-doc "Record when an attendee can meet, as the slots they are free in.".
 -spec submit(fw_attendee:id(), [fw_grid:slot()], fw_grid:millisecond(), t()) ->
     {ok, t()} | {error, error()}.
-submit(Id, BusySlots, Now, Room) ->
+submit(Id, FreeSlots, Now, Room) ->
     case open(Now, Room) of
-        ok -> record(Id, BusySlots, Room);
+        ok -> extended(record(Id, FreeSlots, Room), Now);
         {error, Reason} -> {error, Reason}
     end.
-
--doc "Always allowed and always succeeds, including for a stranger.".
--spec leave(fw_attendee:id(), t()) -> t().
-leave(Id, #{attendees := Attendees, order := Order} = Room) ->
-    Room#{attendees := maps:remove(Id, Attendees), order := lists:delete(Id, Order)}.
 
 -doc "Settle on a slot. Only the holder of the host token may do this.".
 -spec pick(fw_grid:slot(), token(), fw_grid:millisecond(), t()) -> {ok, t()} | {error, error()}.
@@ -101,11 +100,6 @@ expires_at(#{expires_at := ExpiresAt}) -> ExpiresAt.
 -spec picked(t()) -> fw_grid:slot() | undefined.
 picked(#{picked := Picked}) -> Picked.
 
--doc "The settled meeting, or `undefined` while the room is still open.".
--spec chosen(t()) -> fw_proposal:t() | undefined.
-chosen(#{picked := undefined}) -> undefined;
-chosen(#{picked := Slot} = Room) -> proposal(#{start => Slot, free => answered(Room)}, Room).
-
 -spec is_expired(fw_grid:millisecond(), t()) -> boolean().
 is_expired(Now, #{expires_at := ExpiresAt}) -> Now >= ExpiresAt.
 
@@ -114,18 +108,8 @@ is_expired(Now, #{expires_at := ExpiresAt}) -> Now >= ExpiresAt.
 attendees(#{attendees := Attendees, order := Order}) ->
     [maps:get(Id, Attendees) || Id <- Order].
 
--spec heatmap(t()) -> fw_heatmap:counts().
-heatmap(#{grid := Grid} = Room) ->
-    fw_heatmap:counts([fw_attendee:availability(A) || A <- answered_by(Room)], Grid).
-
--spec proposals(t()) -> [fw_proposal:t()].
-proposals(#{grid := Grid, duration_slots := Duration} = Room) ->
-    Windows = fw_heatmap:windows(heatmap(Room), Duration, Grid),
-    [proposal(W, Room) || W <- fw_heatmap:best(Windows, ?MAX_PROPOSALS)].
-
 %%% ---- writing a room down ----
 
--doc "Serialisation lives here because this module owns the shape being written.".
 -spec to_binary(t()) -> binary().
 to_binary(Room) -> term_to_binary({?SNAPSHOT, Room}).
 
@@ -142,34 +126,35 @@ from_binary(Bytes) ->
 %%% ---- internal ----
 
 build(#{grid := Grid, duration_slots := Duration} = Params, Now) ->
-    #{host_token := Token, capacity := Capacity, ttl_ms := Ttl} = Params,
+    #{host_token := Token, capacity := Capacity, idle_ms := Idle} = Params,
     #{
         grid => Grid,
         duration_slots => Duration,
         host_token => Token,
         capacity => Capacity,
+        idle_ms => Idle,
         attendees => #{},
         order => [],
         picked => undefined,
-        expires_at => Now + Ttl
+        expires_at => Now + Idle
     }.
 
-proposal(Window, #{grid := Grid, duration_slots := Duration}) ->
-    fw_proposal:of_window(Window, Duration, Grid).
+%% Any change is a sign the meeting is still being arranged, so the deadline
+%% moves. Picking does not go through here: a settled room runs out its grace.
+extended({ok, Room}, Now) -> {ok, touched(Now, Room)};
+extended({error, Reason}, _Now) -> {error, Reason}.
 
-answered_by(Room) -> [A || A <- attendees(Room), fw_attendee:has_availability(A)].
-
-answered(Room) -> length(answered_by(Room)).
+touched(Now, #{idle_ms := Idle} = Room) -> Room#{expires_at := Now + Idle}.
 
 open(Now, #{expires_at := ExpiresAt}) when Now >= ExpiresAt -> {error, expired};
 open(_Now, #{picked := Picked}) when Picked =/= undefined -> {error, finalized};
 open(_Now, _Room) -> ok.
 
-admit(Id, Alias, Now, #{attendees := Attendees, capacity := Capacity} = Room) ->
+admit(Id, Alias, #{attendees := Attendees, capacity := Capacity} = Room) ->
     case {maps:is_key(Id, Attendees), maps:size(Attendees) >= Capacity} of
         {true, _AtCapacity} -> {error, duplicate};
         {false, true} -> {error, full};
-        {false, false} -> attach(fw_attendee:new(Id, Alias, Now), Id, Room)
+        {false, false} -> attach(fw_attendee:new(Id, Alias), Id, Room)
     end.
 
 attach({ok, Attendee}, Id, #{attendees := Attendees, order := Order} = Room) ->
@@ -177,8 +162,8 @@ attach({ok, Attendee}, Id, #{attendees := Attendees, order := Order} = Room) ->
 attach({error, Reason}, _Id, _Room) ->
     {error, Reason}.
 
-record(Id, BusySlots, #{grid := Grid, attendees := Attendees} = Room) ->
-    case {maps:find(Id, Attendees), fw_availability:from_slots(BusySlots, Grid)} of
+record(Id, FreeSlots, #{grid := Grid, attendees := Attendees} = Room) ->
+    case {maps:find(Id, Attendees), fw_availability:from_slots(FreeSlots, Grid)} of
         {{ok, Attendee}, {ok, Availability}} ->
             Updated = fw_attendee:with_availability(Availability, Attendee),
             {ok, Room#{attendees := Attendees#{Id => Updated}}};

@@ -2,14 +2,13 @@
 -moduledoc """
 A token bucket, as a value.
 
-Pure: it holds no timer and reads no clock, so refill is computed from the
-elapsed time handed to `take/3`. That makes every rate-limiting rule testable
-by arithmetic rather than by waiting.
+Pure: no timer, no clock. Refill is computed from the elapsed time handed to
+`take/3`, which makes every rate-limiting rule testable by arithmetic rather
+than by waiting.
 
-Costs are in whole tokens and `refill_per_sec` may be fractional, which is how
-"ten rooms, then one a minute" is expressed without a scheduler. The balance is
-always a float, so that a partial refill never turns one bucket's arithmetic
-into a different type from another's.
+`refill_per_sec` may be fractional — that is how "ten rooms, then one a minute"
+is expressed without a scheduler. The balance is always a float, so a partial
+refill never turns one bucket's arithmetic into a different type from another's.
 """.
 
 -export([new/2, take/3, tokens/1]).

@@ -6,24 +6,37 @@ grid() ->
     {ok, Grid} = fw_grid:new(0, 15, 6),
     Grid.
 
-busy(Slots) ->
+free(Slots) ->
     {ok, Availability} = fw_availability:from_slots(Slots, grid()),
     Availability.
+
+all_week() -> free(lists:seq(0, 5)).
+
+%% Free everywhere except the given slots, which is how a real answer looks.
+free_except(Busy) ->
+    free([Slot || Slot <- lists:seq(0, 5), not lists:member(Slot, Busy)]).
 
 %%% ---- counts ----
 
 nobody_present_means_nobody_free_test() ->
     ?assertEqual([0, 0, 0, 0, 0, 0], fw_heatmap:counts([], grid())).
 
-someone_busy_nowhere_is_free_throughout_test() ->
-    ?assertEqual([1, 1, 1, 1, 1, 1], fw_heatmap:counts([fw_availability:free()], grid())).
+someone_free_all_week_is_counted_throughout_test() ->
+    ?assertEqual([1, 1, 1, 1, 1, 1], fw_heatmap:counts([all_week()], grid())).
 
-a_busy_slot_is_subtracted_from_that_slot_only_test() ->
-    ?assertEqual([1, 0, 1, 1, 1, 1], fw_heatmap:counts([busy([1])], grid())).
+%% Somebody who said nothing is nobody's availability.
+someone_who_answered_nothing_counts_nowhere_test() ->
+    ?assertEqual([0, 0, 0, 0, 0, 0], fw_heatmap:counts([fw_availability:none()], grid())).
+
+a_slot_somebody_is_busy_in_loses_that_one_count_test() ->
+    ?assertEqual([1, 0, 1, 1, 1, 1], fw_heatmap:counts([free_except([1])], grid())).
 
 counts_add_up_across_attendees_test() ->
-    People = [busy([1]), busy([1, 2]), fw_availability:free()],
+    People = [free_except([1]), free_except([1, 2]), all_week()],
     ?assertEqual([3, 1, 2, 3, 3, 3], fw_heatmap:counts(People, grid())).
+
+only_the_stretch_somebody_offered_is_counted_test() ->
+    ?assertEqual([0, 1, 1, 0, 0, 0], fw_heatmap:counts([free([1, 2])], grid())).
 
 %%% ---- windows ----
 

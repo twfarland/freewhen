@@ -8,3 +8,4 @@ log/
 /tmp/
 web/node_modules/
 apps/fw_web/priv/static/app.js
+deploy/inventory.ini

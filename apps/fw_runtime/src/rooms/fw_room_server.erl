@@ -2,23 +2,16 @@
 -moduledoc """
 One room, one process, all of it in memory.
 
-The process holds no logic: it decodes a command, calls `fw_room`, keeps the
-answer, and tells its watchers. Every rule about what is allowed lives in the
-domain, which is why this module has no branch on room state anywhere.
+No logic here: decode a command, call `fw_room`, keep the answer, tell the
+watchers. Every rule lives in the domain, which is why nothing below branches
+on room state. Watchers get `fw_room:t()` — the domain value, not JSON — so
+this layer stays ignorant of the wire, and they are monitored so a connection
+that goes away is forgotten without anyone saying so.
 
-It does not know its own hash. The directory owns that mapping, so a room
-process contains nothing that could identify the room to anyone who obtained a
-process dump.
-
-Watchers are monitored, so a connection that goes away is forgotten without
-anyone having to say so. The payload they receive is `fw_room:t()` — the
-domain value, not JSON — which is what keeps this layer ignorant of the wire.
-
-Lifetime is the room's own: the TTL timer is set from `fw_room:expires_at/1`,
-so the domain remains the single source of truth about when a room ends. Once a
-slot is picked the room stops accepting changes and the timer is shortened to a
-grace period, long enough to export the invitation and short enough that a
-settled room is not a resident.
+A room lives on idleness: the timer comes from `fw_room:expires_at/1`, which
+every change pushes out, so the domain stays the single source of truth about
+when a room ends. Picking a slot settles it and swaps the idle window for a
+fixed grace — a settled room is no longer a negotiation.
 """.
 
 -behaviour(gen_server).
@@ -39,7 +32,6 @@ settled room is not a resident.
 -type command() ::
     {join, fw_attendee:alias()}
     | {submit, fw_attendee:id(), [fw_grid:slot()]}
-    | {leave, fw_attendee:id()}
     | {pick, fw_grid:slot(), fw_room:token()}.
 
 -type result() :: ok | {joined, fw_attendee:id()}.
@@ -56,9 +48,9 @@ settled room is not a resident.
 }).
 
 %% How long a change may go unwritten. Writing on every change would put a disk
-%% write in the path of every keystroke of a drag, and serialise every room in
-%% the system through one DETS process; a hard kill can cost this much and no
-%% more, and a graceful stop costs nothing because it flushes.
+%% write in the path of every cell of a drag and serialise every room through
+%% one DETS process. A hard kill costs this much and no more; a graceful stop
+%% flushes and costs nothing.
 -define(SNAPSHOT_EVERY_MS, 2_000).
 
 -spec start_link(args()) -> gen_server:start_ret().
@@ -138,10 +130,8 @@ decide({join, Alias}, Now, Room) ->
         {ok, Updated} -> {ok, {joined, Id}, Updated};
         {error, Reason} -> {error, Reason}
     end;
-decide({submit, Id, BusySlots}, Now, Room) ->
-    changed(fw_room:submit(Id, BusySlots, Now, Room));
-decide({leave, Id}, _Now, Room) ->
-    {ok, ok, fw_room:leave(Id, Room)};
+decide({submit, Id, FreeSlots}, Now, Room) ->
+    changed(fw_room:submit(Id, FreeSlots, Now, Room));
 decide({pick, Slot, Token}, Now, Room) ->
     changed(fw_room:pick(Slot, Token, Now, Room)).
 
@@ -150,7 +140,7 @@ changed({error, Reason}) -> {error, Reason}.
 
 published(#state{room = Room, watchers = Watchers} = State) ->
     _Sent = [Watcher ! {room_changed, Room} || Watcher <- maps:values(Watchers)],
-    settle(State#state{unwritten = true}).
+    lifetime(State#state{unwritten = true}).
 
 flushed(#state{unwritten = false} = State) ->
     State;
@@ -163,26 +153,25 @@ written(#state{hash = Hash, room = Room, snapshots = Snapshots}) ->
 
 %%% ---- lifetime ----
 
-settle(#state{phase = settled} = State) ->
+%% A room lives on idleness, so every change moves its deadline; once a slot is
+%% picked it stops being a negotiation and runs out a fixed grace instead.
+lifetime(#state{phase = settled} = State) ->
     State;
-settle(#state{room = Room} = State) ->
+lifetime(#state{room = Room, grace_ms = Grace} = State) ->
     case fw_room:picked(Room) of
-        undefined -> State;
-        _Slot -> grace(State)
+        undefined -> deadline(fw_room:expires_at(Room) - fw_clock:now_ms(), State);
+        _Slot -> (deadline(Grace, State))#state{phase = settled}
     end.
 
-grace(#state{timer = Timer, grace_ms = Grace} = State) ->
+deadline(In, #state{timer = Timer} = State) ->
     _Cancelled = erlang:cancel_timer(Timer),
-    State#state{phase = settled, timer = erlang:send_after(Grace, self(), expired)}.
+    State#state{timer = erlang:send_after(max(0, In), self(), expired)}.
 
 -doc """
-A room that ended on purpose leaves nothing behind, on disk or anywhere else.
-
-Any other reason keeps the snapshot, and the distinction is the whole point:
-`normal` is expiry or a settled room past its grace, while a shutdown is the
-node going down for a release and a crash is a room we would rather have back.
-Forgetting on every reason would erase every room during exactly the event
-snapshots exist for.
+A room that ended on purpose leaves nothing behind; any other reason keeps the
+snapshot. `normal` is expiry or a settled room past its grace. A shutdown is
+the node going down for a release, and forgetting on that reason would erase
+every room during exactly the event snapshots exist for.
 """.
 -spec terminate(term(), #state{}) -> ok.
 terminate(normal, #state{hash = Hash, snapshots = Snapshots}) ->

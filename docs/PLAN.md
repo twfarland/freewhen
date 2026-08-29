@@ -2,122 +2,85 @@
 
 ## Where this is
 
-A working product. Create a room, share the link, join under an alias, set your
-availability from a preset and drag to adjust, see the heatmap update live for
+A working product, feature-complete as a technical prototype. Create a room,
+share the link, join under an alias, set your availability from a preset and
+adjust it by dragging or with the keyboard, watch the heatmap update live for
 everyone, and have whoever started the room pick a time and export an
-invitation. Rooms delete themselves, and a release no longer costs them.
+invitation. Rooms delete themselves, and neither a release nor a reboot costs
+them.
 
 ```
-rebar3 do compile, eunit, ct, xref, dialyzer    94 unit + 26 integration, clean
-cd web && npm run check && npm run build        strict tsc, 10 kB gzipped
+rebar3 do compile, eunit, ct, xref, dialyzer   102 unit + 26 integration, clean
+cd web && npm run check && npm test             strict tsc, 56 client tests
+cd web && npm run build                         ~10 kB gzipped
+rebar3 as prod tar                              the deployable artefact, Ubuntu only
 ```
 
-## Done
-
-**Domain** (`fw_core/src/domain/`, 6 modules, ~380 lines, 71 unit tests). Grid,
-availability, attendee, heatmap, proposal, room aggregate. Pure — every rule is
-a function of its arguments, so the suite runs in two seconds with no setup.
-
-Availability is a **set of busy slots**, not a bitmap. The bitmap survives on
-the wire, where it is worth 84 bytes against 2.5 kB, and is translated at the
-edge by `fw_busy_codec`.
-
-**Runtime** (`fw_runtime`, 13 modules across `ports/`, `rooms/`, `support/`).
-A room per process, `temporary` under `simple_one_for_one`. Two ports:
-`fw_room_store` (ETS directory, cleaned up by monitors) and
-`fw_room_snapshots` (`none` or `dets`). TTL and finalise-grace timers driven
-from the domain's own `expires_at`. Token-bucket rate limiting with a sweep.
-
-**Edge** (`fw_web`, 11 modules across `http/`, `ws/`, `json/`). Create, resume,
-health, the websocket, the static client. The protocol lives in one module.
-
-**Durability** ([ADR 0011](adr/0011-a-local-snapshot-so-a-restart-keeps-the-rooms.md)).
-Rooms are snapshotted to one DETS file and restored at boot, so a deploy keeps
-them with everyone in them. Off by default — `FW_SNAPSHOT_FILE` turns it on —
-so development and CI never touch a disk. Five integration tests, including
-restarting the application, an expired snapshot, and an unreadable one.
-
-**Resume** ([ADR 0008](adr/0008-rooms-are-resumed-from-the-host-token.md)).
-A room's hash is the SHA-256 of its host token, so a host's browser can reopen
-a room from nothing. The layer beneath snapshots, for a store that was off or
-lost.
-
-**Server decides, browser formats.** Proposals carry UTC start and end
-instants; the client does no scheduling arithmetic. The server holds no
-timezone at all ([ADR 0010](adr/0010-the-server-holds-no-timezone.md)).
-
-**Client** (`web/`, 9 modules, ~735 lines, Lit templates). Presets and
-drag-painting, live heatmap in local time, `.ics` export, reconnect and
-recovery.
-
-**Guardrails.** `CLAUDE.md`, four skills, and a hook that rejects an edit
-breaking the layer rules or the 200-line/30-line size limits. Eleven ADRs, two
-of them superseding earlier ones. CI runs the client typecheck and build, then
-compile, eunit, ct, xref and dialyzer.
+`docs/ARCHITECTURE.md` describes what exists and why it is shaped that way.
+This file is only what is left.
 
 ## Next, in order
 
-1. **Client tests.** Still none, and there are three pure modules that deserve
-   them: `mask.ts` (bit packing, base64url round trip, the weekday preset
-   across a clock change), `time.ts`, and `memory.ts`. Needs a test runner,
-   which is a dependency and therefore an ADR; `node --test` over esbuild
-   output would avoid adding one.
+1. **A real browser, and a real phone.** Unit tests cover the pure modules and
+   the reconnection state machine; nothing covers a drag gesture, an `.ics`
+   download, or the socket.
 
-2. **A seat id.** Clients find themselves in the attendee list by matching
-   their own alias, so two people picking the same alias make the highlight
-   ambiguous. Cosmetic. A second, non-secret id per attendee fixes it.
+   One known-by-inspection defect is fixed but unverified: touch gives the
+   first cell implicit pointer capture, so `pointerover` retargeted to it and
+   dragging across the grid painted a single square on a phone. `grid.ts` now
+   releases the capture, which is the standard fix — but it was reasoned, not
+   observed, and it needs a device. If that reasoning is right, the core
+   interaction was broken on mobile and nothing in CI would have said so.
 
-3. **Tell clients a shutdown is coming.** Recovery begins when the socket
-   drops, which costs a few seconds of confusion. A `closed` with a distinct
-   reason on graceful shutdown would let clients wait rather than error.
+   A spring-forward weekend is the other case most likely to be wrong and
+   least likely to be caught. Playwright is the obvious tool and a large
+   dependency.
 
-4. **A working-hours preset that is not 9–5.** Hardcoded to Monday–Friday,
-   09:00–17:00 local. Letting someone drag the boundaries once and reuse them
-   fits anyone whose week is not that, and stays client-side.
+2. **Unique aliases, enforced by the server.** The client refuses to join under
+   a name already in the room, and that is advisory: two people joining at once
+   can still collide, and nothing stops a crafted client. The published
+   attendee list deliberately carries no ids, so an alias is the only thing a
+   browser can match itself on — which makes uniqueness a domain rule.
 
-## Deliberately not doing
+   The projection has since been split out into `fw_schedule`, so `fw_room` is
+   at 192 lines with room to add the check. Nothing is blocking this now
+   except the work: a `taken/2` over the attendee aliases, an `alias_taken`
+   error, and the client message to match.
 
-**Any calendar integration.** [ADR 0006](adr/0006-availability-is-entered-by-hand.md)
-records why the `.ics` importer was built, measured against painting, and
-deleted.
-
-**A real database, or Mnesia.** One key, one value, no queries. DETS is what
-that needs; [ADR 0011](adr/0011-a-local-snapshot-so-a-restart-keeps-the-rooms.md)
-has the comparison.
-
-**CRDTs or Yjs.** They would make the room a value every participant holds,
-which means every participant holding everyone's raw availability — the exact
-thing the product refuses to do. Restricted to one writer per key they collapse
-into the resubmit-on-reconnect already in place. Reasoning in
-[ADR 0011](adr/0011-a-local-snapshot-so-a-restart-keeps-the-rooms.md).
-
-**Storing anything about a person.** No accounts, no email, no timezone.
-
-**Running more than one instance.** A room is a process and the snapshot file
-is local, so two instances means split brain and a corrupt file. Scaling out
-means sharding by room hash with `fly-replay`, not statelessness;
-[ADR 0012](adr/0012-one-instance-and-what-more-would-take.md) records why, and
-what it would take. One machine holds thousands of rooms.
-
-**More ports.** Two, both with a real second implementation or an imminent one.
+3. **Run the playbook against a real machine.** Every deployment decision is
+   reasoned and none has met an actual Ubuntu box. Provision a throwaway
+   Hetzner instance, run `site.yml`, then `reboot.yml`, and find out what the
+   reasoning missed. Until then the deployment is a design, not a capability.
 
 ## Known limits
 
-- **One machine is the capacity and the failure domain.** Measured, a room is
-  3–23 kB in memory, so the configured 5,000-room ceiling costs 15–110 MB and
-  binds long before the hardware does.
-- **Durability stops at the volume.** A Fly volume survives deploys and
-  restarts, not the loss of its host, and it does not follow the app to another
-  region. Resume is the layer beneath it, and that needs the host's tab open.
-- **Room state exists at rest** when snapshots are on: aliases and availability
-  in one file on an encrypted volume, deleted per room the moment the room
-  ends. This is a deliberate reversal of the original no-disk position and the
-  README says so.
-- Anyone with a room link can join under any alias. Same trust model as a
-  shared document link; the attendee cap and the 24-hour life bound it.
-- The server shows counts, never who is free when. Right for external parties;
-  wrong when "Sarah cannot make Tuesday and Sarah is essential" is the actual
-  question.
-- Everyone reads the grid in their own timezone, and nobody sees what a slot
-  means for anyone else. That was briefly built and removed with the timezone
-  field ([ADR 0010](adr/0010-the-server-holds-no-timezone.md)).
+- **One machine is the capacity and the failure domain.** A room is 2.8 kB for
+  an ordinary week, so the 20,000-room ceiling costs about 56 MB in practice
+  and 800 MB against crafted input — under the 4 GB the machine has, but no
+  longer by a wide margin. Nothing replaces the machine if it dies; someone has
+  to notice and re-run the playbook.
+- **Durability stops at the disk.** It survives deploys and reboots, not the
+  loss of the machine. Resume is the layer beneath, and that needs the host's
+  tab open.
+- **Room state exists at rest for up to a month.** Aliases and availability in
+  one 0700 file, deleted per room the moment the room ends — but a room now
+  ends when the meeting is settled or after a month idle, not within a day.
+  That is a materially longer exposure than the original design had, and it is
+  the honest cost of letting coordination take as long as it really takes.
+- **An unattended-upgrades reboot is a restart**, at 04:00 UTC, and only
+  affordable because of the snapshot.
+- **Anyone with a room link can join under any alias**, and can join twice on
+  purpose to weight the counts. Same trust model as a shared document link;
+  the attendee cap and the 24-hour life bound it.
+- **The exported invitation puts the room hash in a jit.si URL.** Anyone
+  holding the `.ics` — and jit.si itself, once someone clicks — learns the
+  room's address. The room dies a day after a time is picked, so the capability
+  is nearly spent, but it is a disclosure and the provider is hardcoded. A
+  product decision worth re-taking.
+- **The server is not zero-knowledge**, and the README no longer implies it is.
+  It holds each person's availability in order to add it up. What is true is
+  that no participant receives another's row, that it is never logged, and that
+  nothing outlives the room.
+- **Nobody sees what a slot means for anyone else.** Everyone reads the grid in
+  their own timezone. That was briefly built and removed with the timezone
+  field.

@@ -1,0 +1,53 @@
+# Managed by deploy/site.yml. Edits here are overwritten.
+[Unit]
+Description=FreeWhen
+After=network-online.target
+Wants=network-online.target
+
+# Never stop trying. systemd's default gives up after five restarts in ten
+# seconds and leaves the unit failed, which is precisely the state that needs
+# a human — and this machine has to come back from a 04:00 kernel reboot with
+# nobody watching.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=freewhen
+Group=freewhen
+WorkingDirectory={{ home }}/current
+ExecStart={{ home }}/current/bin/freewhen foreground
+Restart=always
+RestartSec=2
+
+Environment=PORT={{ port }}
+# Loopback only. Caddy on this host is the only thing that may reach the node,
+# which is what makes x-forwarded-for worth believing — see fw_peer.
+Environment=FW_BIND=127.0.0.1
+# Turning this on is the whole of durability. Unset it and a restart — a
+# deploy, an unattended-upgrades reboot — costs every room in progress.
+Environment=FW_SNAPSHOT_FILE={{ data }}/rooms.dets
+Environment=FW_ALLOWED_ORIGINS=https://{{ domain }}
+
+# The node writes its rooms down on the way out and must be allowed to finish.
+# Each room writes at most every two seconds, so this is generous by a wide
+# margin.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Deliberately not ProtectSystem=strict: the relx start script generates
+# sys.config and vm.args under the release directory at boot, and locking that
+# down means pointing RELX_OUT_FILE_PATH somewhere else. `full` protects
+# /usr, /boot and /etc and cannot fight the start script.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+MemoryMax={{ memory_max }}
+
+[Install]
+WantedBy=multi-user.target

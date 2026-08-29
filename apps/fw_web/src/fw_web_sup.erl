@@ -28,10 +28,17 @@ port() ->
 init(Settings) ->
     {ok, _Listener} = cowboy:start_clear(
         ?LISTENER,
-        [{port, maps:get(port, Settings)}],
+        transport(Settings),
         #{
             env => #{dispatch => fw_web_router:dispatch(Settings)},
             middlewares => [cowboy_router, cowboy_handler]
         }
     ),
     {ok, {#{strategy => one_for_one, intensity => 1, period => 5}, []}}.
+
+%%% ---- internal ----
+
+%% `any` is every interface, which is right on a laptop and wrong behind a
+%% proxy on the same host. See fw_peer.
+transport(#{port := Port, bind := any}) -> [{port, Port}];
+transport(#{port := Port, bind := Address}) -> [{port, Port}, {ip, Address}].

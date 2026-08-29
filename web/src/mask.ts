@@ -1,31 +1,30 @@
-// The busy bits, as the wire wants them.
+// This browser's own answer, as the bits the wire wants.
 //
-// The server's domain holds availability as a set of slots, because that is
-// what it means. The wire packs it one bit per slot — eighty-four bytes for a
-// week against two and a half kilobytes as a list of numbers — and this is the
-// browser's half of that translation.
+// One bit per slot, set means free. The server takes these, turns them into
+// slot numbers, and `fw_availability` merges them into stretches — so the
+// domain never sees a bit and this file never sees a stretch.
 //
 // Bits are most-significant first within each byte, matching Erlang's
 // `<<Bit:1>>` bitstring layout on the other side.
 
+import { DEFAULT_HOURS } from './hours.ts'
+import type { Hours } from './hours.ts'
 import type { Grid } from './protocol.ts'
 import { slotAt } from './time.ts'
 
-const WORKDAY_START = 9 * 60
-const WORKDAY_END = 17 * 60
-
+/** Free nowhere, which is what somebody who has said nothing means. */
 export function emptyMask(grid: Grid): Uint8Array {
   return new Uint8Array((grid.slots + 7) >> 3)
 }
 
-export function setSlot(mask: Uint8Array, slot: number, busy: boolean): void {
+export function setSlot(mask: Uint8Array, slot: number, free: boolean): void {
   const byte = slot >> 3
   const bit = 0x80 >> (slot & 7)
   const current = mask[byte] ?? 0
-  mask[byte] = busy ? current | bit : current & ~bit
+  mask[byte] = free ? current | bit : current & ~bit
 }
 
-export function isBusy(mask: Uint8Array, slot: number): boolean {
+export function isFree(mask: Uint8Array, slot: number): boolean {
   return ((mask[slot >> 3] ?? 0) & (0x80 >> (slot & 7))) !== 0
 }
 
@@ -46,29 +45,29 @@ export function decodeMask(encoded: string, grid: Grid): Uint8Array | undefined 
   }
 }
 
-export type Preset = 'weekdays' | 'clear' | 'all'
+export type Preset = 'weekdays' | 'always' | 'never'
 
 /**
  * A starting point, so nobody has to paint a whole week.
  *
- * `weekdays` marks everything outside Monday to Friday, 9 to 5 local, as busy —
- * most people's answer most of the time, leaving a handful of exceptions.
- * Read from each slot's own local time, so a week spanning a clock change is
- * still right on both sides of it.
+ * `weekdays` offers Monday to Friday within `hours` local — most people's
+ * answer most of the time, leaving a handful of exceptions to remove. Read
+ * from each slot's own local time, so a week spanning a clock change is right
+ * on both sides of it.
  */
-export function preset(grid: Grid, kind: Preset): Uint8Array {
+export function preset(grid: Grid, kind: Preset, hours: Hours = DEFAULT_HOURS): Uint8Array {
   const mask = emptyMask(grid)
-  if (kind === 'clear') return mask
+  if (kind === 'never') return mask
   for (let slot = 0; slot < grid.slots; slot++) {
-    setSlot(mask, slot, kind === 'all' || !isWorkingHour(grid, slot))
+    setSlot(mask, slot, kind === 'always' || isWorkingHour(grid, slot, hours))
   }
   return mask
 }
 
-function isWorkingHour(grid: Grid, slot: number): boolean {
+function isWorkingHour(grid: Grid, slot: number, hours: Hours): boolean {
   const at = new Date(slotAt(grid, slot))
   const weekday = at.getDay()
   const minutes = at.getHours() * 60 + at.getMinutes()
   const isWeekday = weekday >= 1 && weekday <= 5
-  return isWeekday && minutes >= WORKDAY_START && minutes < WORKDAY_END
+  return isWeekday && minutes >= hours.start && minutes < hours.end
 }
