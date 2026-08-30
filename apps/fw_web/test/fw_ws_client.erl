@@ -2,7 +2,7 @@
 -moduledoc "A websocket client for the integration suite.".
 
 -export([connect/2, upgrade_status/2, close/1, send/2, recv/1, silent/1]).
--export([join/2, submit/3, pick/3]).
+-export([join/2, submit/3, pick/3, unpick/2, exclude_silent/2, cancel/2]).
 
 -define(TIMEOUT, 5_000).
 
@@ -37,6 +37,15 @@ submit(Socket, Id, Free) ->
 
 pick(Socket, Token, Slot) ->
     send(Socket, #{<<"type">> => <<"pick">>, <<"hostToken">> => Token, <<"slot">> => Slot}).
+
+unpick(Socket, Token) ->
+    send(Socket, #{<<"type">> => <<"unpick">>, <<"hostToken">> => Token}).
+
+exclude_silent(Socket, Token) ->
+    send(Socket, #{<<"type">> => <<"excludeSilent">>, <<"hostToken">> => Token}).
+
+cancel(Socket, Token) ->
+    send(Socket, #{<<"type">> => <<"cancel">>, <<"hostToken">> => Token}).
 
 %%% ---- frames ----
 

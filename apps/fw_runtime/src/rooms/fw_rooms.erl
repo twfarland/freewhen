@@ -90,7 +90,8 @@ build(Hash, Token, #{grid := Grid, duration_slots := Duration}, Settings) ->
         duration_slots => Duration,
         host_token => Token,
         capacity => maps:get(max_attendees_per_room, Settings),
-        idle_ms => maps:get(room_idle_ms, Settings)
+        idle_ms => maps:get(room_idle_ms, Settings),
+        grace_ms => maps:get(finalize_grace_ms, Settings)
     },
     case fw_room:new(Params, fw_clock:now_ms()) of
         {ok, Room} -> opened(Hash, Token, Room, Settings);
@@ -107,7 +108,6 @@ start(Hash, Room, Settings) ->
     Args = #{
         hash => Hash,
         room => Room,
-        grace_ms => maps:get(finalize_grace_ms, Settings),
         snapshots => maps:get(snapshots, Settings)
     },
     {ok, Pid} = fw_room_sup:start_room(Args),

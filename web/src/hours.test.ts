@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_HOURS, areHours, asClock, fromClock } from './hours.ts'
+import { DEFAULT_HOURS, areHours, asClock } from './hours.ts'
 
 test('the default working day is nine to five', () => {
   assert.deepEqual(DEFAULT_HOURS, { start: 540, end: 1020 })
@@ -11,24 +11,6 @@ test('minutes render as the HH:MM an input wants', () => {
   assert.equal(asClock(540), '09:00')
   assert.equal(asClock(1020), '17:00')
   assert.equal(asClock(1439), '23:59')
-})
-
-test('HH:MM reads back as minutes', () => {
-  assert.equal(fromClock('00:00'), 0)
-  assert.equal(fromClock('09:30'), 570)
-  assert.equal(fromClock('23:59'), 1439)
-})
-
-test('what an input cannot produce is refused rather than guessed', () => {
-  for (const bad of ['', '9:00', '09:00:00', 'nine', '25:00', '99:99']) {
-    assert.equal(fromClock(bad), undefined, bad)
-  }
-})
-
-test('every minute of the day survives the round trip', () => {
-  for (let minutes = 0; minutes < 1440; minutes++) {
-    assert.equal(fromClock(asClock(minutes)), minutes)
-  }
 })
 
 // A day that ends before it starts selects nothing, which is never what

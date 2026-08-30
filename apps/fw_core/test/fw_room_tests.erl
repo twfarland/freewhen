@@ -4,6 +4,7 @@
 
 -define(TOKEN, <<"host-token-0123456789abcdef">>).
 -define(IDLE, 2_592_000_000).
+-define(GRACE, 86_400_000).
 -define(SLOT_MS, 900_000).
 
 grid() ->
@@ -19,14 +20,17 @@ room(Overrides) ->
             duration_slots => 2,
             host_token => ?TOKEN,
             capacity => 3,
-            idle_ms => ?IDLE
+            idle_ms => ?IDLE,
+            grace_ms => ?GRACE
         },
         Overrides
     ),
     {ok, Room} = fw_room:new(Params, 1000),
     Room.
 
-joined(Ids) -> lists:foldl(fun join/2, room(), Ids).
+joined(Ids) -> joined(Ids, room()).
+
+joined(Ids, Room) -> lists:foldl(fun join/2, Room, Ids).
 
 join(Id, Room) ->
     {ok, Next} = fw_room:join(Id, Id, 1000, Room),
@@ -37,6 +41,13 @@ answered(Id, FreeSlots, Room) ->
     Next.
 
 all_week() -> lists:seq(0, 7).
+
+%% A room where everybody present has answered, which is the only state in
+%% which a time may be chosen at all.
+ready() -> ready([<<"a">>]).
+
+ready(Ids) ->
+    lists:foldl(fun(Id, Room) -> answered(Id, all_week(), Room) end, joined(Ids), Ids).
 
 free_except(Busy) -> [Slot || Slot <- all_week(), not lists:member(Slot, Busy)].
 
@@ -62,13 +73,11 @@ a_room_nobody_touches_still_runs_out_test() ->
     {ok, Room} = fw_room:join(<<"a">>, <<"a">>, 2000, room()),
     ?assert(fw_room:is_expired(2000 + ?IDLE, Room)).
 
-%% Picking settles the room, and a settled room is not a negotiation any more:
-%% the runtime swaps it onto a fixed grace rather than an idle window.
-picking_does_not_push_the_deadline_out_test() ->
-    Room = joined([<<"a">>]),
-    Before = fw_room:expires_at(Room),
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 2000, Room),
-    ?assertEqual(Before, fw_room:expires_at(Picked)).
+%% Picking is a change like any other, so it counts as the meeting still being
+%% arranged — which it is, right up until it has happened.
+picking_pushes_the_deadline_out_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 2000, ready()),
+    ?assertEqual(2000 + ?IDLE, fw_room:expires_at(Picked)).
 
 a_new_room_has_nobody_in_it_and_nothing_chosen_test() ->
     ?assertEqual([], fw_room:attendees(room())),
@@ -81,7 +90,8 @@ a_meeting_longer_than_the_grid_cannot_be_scheduled_test() ->
         duration_slots => 9,
         host_token => ?TOKEN,
         capacity => 3,
-        idle_ms => ?IDLE
+        idle_ms => ?IDLE,
+        grace_ms => ?GRACE
     },
     ?assertEqual({error, bad_duration}, fw_room:new(Params, 1000)).
 
@@ -153,9 +163,11 @@ answering_again_replaces_rather_than_accumulates_test() ->
 
 %%% ---- proposals ----
 
+%% Overlapping windows are one offer, so a four-slot stretch yields two
+%% suggestions rather than three.
 proposals_rank_the_windows_everyone_can_attend_test() ->
     Room = answered(<<"a">>, [4, 5, 6, 7], joined([<<"a">>])),
-    ?assertEqual([4, 5, 6], [fw_proposal:slot(P) || P <- fw_schedule:proposals(Room)]).
+    ?assertEqual([4, 6], [fw_proposal:slot(P) || P <- fw_schedule:proposals(Room)]).
 
 %% The browser is given instants, never slot numbers to do arithmetic on.
 a_proposal_carries_the_utc_instants_of_its_window_test() ->
@@ -168,14 +180,73 @@ a_proposal_carries_the_utc_instants_of_its_window_test() ->
 a_room_where_nobody_answered_offers_nothing_test() ->
     ?assertEqual([], fw_schedule:proposals(joined([<<"a">>]))).
 
+%%% ---- how far the meeting has got ----
+
+%% The phase is derived from availability and nothing else, so it can never
+%% disagree with what people actually said.
+
+a_room_nobody_has_joined_is_still_collecting_test() ->
+    ?assertEqual(collecting, fw_schedule:phase(room())).
+
+a_room_with_somebody_still_deciding_is_collecting_test() ->
+    Waiting = answered(<<"a">>, all_week(), joined([<<"a">>, <<"b">>])),
+    ?assertEqual(collecting, fw_schedule:phase(Waiting)).
+
+a_room_where_everybody_answered_is_ready_test() ->
+    ?assertEqual(ready, fw_schedule:phase(ready([<<"a">>, <<"b">>]))).
+
+a_time_everybody_is_free_for_is_confirmed_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready([<<"a">>, <<"b">>])),
+    ?assertEqual(confirmed, fw_schedule:phase(Picked)).
+
+%% The scenario the whole model exists for: a time is agreed and then somebody
+%% can no longer make it. Nobody has to remember to un-accept anything.
+availability_changing_under_a_confirmed_time_invalidates_it_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready([<<"a">>, <<"b">>])),
+    Changed = answered(<<"b">>, free_except([4]), Picked),
+    ?assertEqual(provisional, fw_schedule:phase(Changed)),
+    ?assertEqual(1, fw_proposal:free(fw_schedule:chosen(Changed))).
+
+and_changing_it_back_confirms_it_again_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready([<<"a">>, <<"b">>])),
+    Changed = answered(<<"b">>, free_except([4]), Picked),
+    Restored = answered(<<"b">>, all_week(), Changed),
+    ?assertEqual(confirmed, fw_schedule:phase(Restored)).
+
+%% Somebody who has not answered cannot be counted as coming, so a latecomer
+%% makes a confirmed meeting provisional rather than leaving it looking settled.
+a_latecomer_makes_a_confirmed_meeting_provisional_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    {ok, Late} = fw_room:join(<<"b">>, <<"b">>, 1000, Picked),
+    ?assertEqual(provisional, fw_schedule:phase(Late)).
+
+%% The chosen time reports how many can actually make it, not how many are in
+%% the room — it used to claim everybody could, whatever they had said.
+the_chosen_time_carries_how_many_can_make_it_test() ->
+    Room = answered(<<"b">>, free_except([5]), ready([<<"a">>, <<"b">>])),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, Room),
+    ?assertEqual(1, fw_proposal:free(fw_schedule:chosen(Picked))).
+
+%% A window is only attended by somebody free for all of it.
+being_free_for_half_a_meeting_is_not_being_free_for_it_test() ->
+    Room = answered(<<"b">>, free_except([5]), ready([<<"a">>, <<"b">>])),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, Room),
+    ?assertEqual(provisional, fw_schedule:phase(Picked)).
+
+going_ahead_without_the_silent_confirms_what_is_left_test() ->
+    Waiting = answered(<<"a">>, all_week(), joined([<<"a">>, <<"b">>])),
+    {ok, Without} = fw_room:exclude_silent(?TOKEN, 1000, Waiting),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, Without),
+    ?assertEqual(confirmed, fw_schedule:phase(Picked)).
+
 %%% ---- picking ----
 
 the_host_can_pick_a_slot_test() ->
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, joined([<<"a">>])),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
     ?assertEqual(4, fw_room:picked(Picked)).
 
 the_chosen_time_is_a_proposal_with_its_instants_test() ->
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, joined([<<"a">>])),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
     Chosen = fw_schedule:chosen(Picked),
     ?assertEqual(4, fw_proposal:slot(Chosen)),
     ?assertEqual(4 * ?SLOT_MS, fw_proposal:starts_at(Chosen)),
@@ -192,24 +263,117 @@ a_token_that_is_not_a_binary_cannot_pick_test() ->
     ?assertEqual({error, forbidden}, fw_room:pick(4, undefined, 1000, room())).
 
 a_meeting_must_finish_inside_the_grid_test() ->
-    ?assertEqual({error, bad_slot}, fw_room:pick(7, ?TOKEN, 1000, room())),
-    ?assertMatch({ok, _}, fw_room:pick(6, ?TOKEN, 1000, room())).
+    ?assertEqual({error, bad_slot}, fw_room:pick(7, ?TOKEN, 1000, ready())),
+    ?assertMatch({ok, _}, fw_room:pick(6, ?TOKEN, 1000, ready())).
 
 picking_a_slot_that_is_not_a_slot_is_refused_test() ->
-    ?assertEqual({error, bad_slot}, fw_room:pick(<<"4">>, ?TOKEN, 1000, room())).
+    ?assertEqual({error, bad_slot}, fw_room:pick(<<"4">>, ?TOKEN, 1000, ready())).
+
+%%% ---- everybody answers before a time is chosen ----
+
+%% Choosing while somebody is still deciding is how a meeting gets booked over
+%% the one person who could not make it.
+a_time_cannot_be_chosen_while_somebody_is_still_deciding_test() ->
+    Waiting = answered(<<"a">>, all_week(), joined([<<"a">>, <<"b">>])),
+    ?assertEqual({error, still_waiting}, fw_room:pick(4, ?TOKEN, 1000, Waiting)).
+
+%% Including an empty room: a time cannot be chosen for nobody.
+a_time_cannot_be_chosen_in_an_empty_room_test() ->
+    ?assertEqual({error, still_waiting}, fw_room:pick(4, ?TOKEN, 1000, room())).
+
+%% The gate has exactly one way past, and it is the honest one.
+excluding_the_silent_lets_the_meeting_be_arranged_test() ->
+    Waiting = answered(<<"a">>, all_week(), joined([<<"a">>, <<"b">>])),
+    {ok, Without} = fw_room:exclude_silent(?TOKEN, 1000, Waiting),
+    ?assertEqual([<<"a">>], [fw_attendee:id(A) || A <- fw_room:attendees(Without)]),
+    ?assertMatch({ok, _}, fw_room:pick(4, ?TOKEN, 1000, Without)).
+
+only_the_host_may_go_ahead_without_somebody_test() ->
+    ?assertEqual({error, forbidden}, fw_room:exclude_silent(<<"guess">>, 1000, room())).
+
+%% A latecomer who has not answered shuts the gate again, because the room now
+%% holds somebody whose availability nobody knows.
+a_latecomer_shuts_the_gate_again_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    {ok, Late} = fw_room:join(<<"b">>, <<"b">>, 1000, Picked),
+    ?assertNot(fw_room:everyone_answered(Late)),
+    ?assertEqual({error, still_waiting}, fw_room:pick(2, ?TOKEN, 1000, Late)).
+
+%%% ---- calling it off ----
+
+only_the_host_may_cancel_test() ->
+    ?assertEqual({error, forbidden}, fw_room:cancel(<<"guess">>, 1000, room())).
+
+a_cancelled_room_is_over_at_once_test() ->
+    {ok, Cancelled} = fw_room:cancel(?TOKEN, 1000, ready()),
+    ?assert(fw_room:cancelled(Cancelled)),
+    ?assert(fw_room:is_expired(1000, Cancelled)).
+
+%% Not even the host: cancelling is the end, and the room stops answering.
+a_cancelled_room_refuses_everything_test() ->
+    {ok, Cancelled} = fw_room:cancel(?TOKEN, 1000, ready()),
+    ?assertEqual({error, expired}, fw_room:join(<<"b">>, <<"b">>, 1000, Cancelled)),
+    ?assertEqual({error, expired}, fw_room:submit(<<"a">>, [0], 1000, Cancelled)),
+    ?assertEqual({error, expired}, fw_room:pick(4, ?TOKEN, 1000, Cancelled)),
+    ?assertEqual({error, expired}, fw_room:cancel(?TOKEN, 1000, Cancelled)).
+
+a_new_room_has_not_been_cancelled_test() ->
+    ?assertNot(fw_room:cancelled(room())).
 
 picking_in_an_expired_room_is_refused_test() ->
     ?assertEqual({error, expired}, fw_room:pick(4, ?TOKEN, 1000 + ?IDLE, room())).
 
-%%% ---- once settled, the room is read-only ----
+%%% ---- a pick is an answer, not an ending ----
 
-nobody_may_join_after_a_slot_is_picked_test() ->
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, room()),
-    ?assertEqual({error, finalized}, fw_room:join(<<"a">>, <<"a">>, 1000, Picked)).
+%% Plans change and meetings get pushed. A room that locked itself the moment a
+%% time was chosen would be dead exactly when somebody needed to move it.
 
-nobody_may_answer_again_after_a_slot_is_picked_test() ->
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, joined([<<"a">>])),
-    ?assertEqual({error, finalized}, fw_room:submit(<<"a">>, [0], 1000, Picked)).
+somebody_late_may_still_join_after_a_slot_is_picked_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    ?assertMatch({ok, _}, fw_room:join(<<"b">>, <<"b">>, 1000, Picked)).
+
+a_new_conflict_may_be_recorded_after_a_slot_is_picked_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    ?assertMatch({ok, _}, fw_room:submit(<<"a">>, [0], 1000, Picked)).
+
+the_host_may_move_the_meeting_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    {ok, Moved} = fw_room:pick(2, ?TOKEN, 1000, Picked),
+    ?assertEqual(2, fw_room:picked(Moved)).
+
+the_host_may_take_the_meeting_back_off_the_table_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    {ok, Reopened} = fw_room:unpick(?TOKEN, 1000, Picked),
+    ?assertEqual(undefined, fw_room:picked(Reopened)).
+
+only_the_host_may_unpick_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    ?assertEqual({error, forbidden}, fw_room:unpick(<<"not-the-host-token-abcdef">>, 1000, Picked)).
+
+unpicking_a_room_nobody_settled_changes_nothing_test() ->
+    {ok, Room} = fw_room:unpick(?TOKEN, 1000, ready()),
+    ?assertEqual(undefined, fw_room:picked(Room)).
+
+%% The deadline that matters after a pick is the meeting's, not the decision's:
+%% a slot chosen weeks out has to keep its room alive for those weeks.
+a_picked_slot_holds_the_room_open_until_the_grace_after_it_test() ->
+    Impatient = impatient(),
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, Impatient),
+    ?assertEqual(6 * ?SLOT_MS + ?GRACE, fw_room:expires_at(Picked)).
+
+unpicking_returns_the_room_to_its_idle_deadline_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, impatient()),
+    {ok, Reopened} = fw_room:unpick(?TOKEN, 2000, Picked),
+    ?assertEqual(62_000, fw_room:expires_at(Reopened)).
+
+impatient() ->
+    answered(<<"a">>, all_week(), joined([<<"a">>], room(#{idle_ms => 60_000}))).
+
+%% Idleness still wins when it reaches further, so a meeting settled for
+%% tomorrow does not shorten a room somebody is still using.
+idleness_still_wins_when_it_reaches_past_the_meeting_test() ->
+    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, ready()),
+    ?assertEqual(1000 + ?IDLE, fw_room:expires_at(Picked)).
 
 an_answer_too_fragmented_to_be_meant_is_refused_test() ->
     {ok, Wide} = fw_grid:new(0, 15, 672),
@@ -218,16 +382,13 @@ an_answer_too_fragmented_to_be_meant_is_refused_test() ->
         duration_slots => 2,
         host_token => ?TOKEN,
         capacity => 3,
-        idle_ms => ?IDLE
+        idle_ms => ?IDLE,
+        grace_ms => ?GRACE
     },
     {ok, Room} = fw_room:new(Params, 1000),
     {ok, Joined} = fw_room:join(<<"a">>, <<"a">>, 1000, Room),
     Alternating = [Slot || Slot <- lists:seq(0, 671), Slot rem 2 =:= 0],
     ?assertEqual({error, too_fragmented}, fw_room:submit(<<"a">>, Alternating, 1000, Joined)).
-
-the_host_may_not_change_their_mind_test() ->
-    {ok, Picked} = fw_room:pick(4, ?TOKEN, 1000, room()),
-    ?assertEqual({error, finalized}, fw_room:pick(2, ?TOKEN, 1000, Picked)).
 
 %%% ---- budgets ----
 
@@ -246,7 +407,8 @@ crowded(Grid, Count) ->
         duration_slots => 2,
         host_token => ?TOKEN,
         capacity => Count,
-        idle_ms => ?IDLE
+        idle_ms => ?IDLE,
+        grace_ms => ?GRACE
     },
     {ok, Empty} = fw_room:new(Params, 1000),
     FreeAllWeek = lists:seq(0, 671),

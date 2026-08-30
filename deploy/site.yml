@@ -27,7 +27,7 @@
     home: /opt/freewhen
     data: /var/lib/freewhen
     port: 8080
-    memory_max: 1536M
+    memory_max: 2G
 
   handlers:
     - name: reload caddy

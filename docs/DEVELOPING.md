@@ -104,6 +104,30 @@ means it carries its own runtime, linked against the local libc. On Windows
 `rebar3 as prod tar` produces `.cmd` scripts and no POSIX ones, so a deployable
 tarball has to be built on Ubuntu 24.04. CI does this.
 
+## Pushing it to the ceiling
+
+```sh
+rebar3 compile
+escript bench/load.escript                                        # 20,000 x 8, ordinary answers
+escript bench/load.escript --rooms 5000 --attendees 16 --mode adversarial
+```
+
+Fills the node to `max_rooms`, reports what it cost, checks the cap refuses the
+next one, then restarts the application to time `fw_rooms:restore/0` — the one
+number that is dead time before the listener opens on every deploy. The
+snapshot goes to a scratch directory that is deleted on the way out, and the
+node dies with the script; nothing you care about is touched.
+
+It drives `fw_runtime` directly rather than going through HTTP, because room
+creation is rate limited to about one per ten seconds per address and driving
+it through cowboy would measure the limiter. Concurrency across websockets is a
+different axis and is **not** covered.
+
+The figures in `config/sys.config` and `docs/ARCHITECTURE.md` come from this.
+Re-run it before raising a cap: the first set of numbers was extrapolated from
+a single room and was four times too low, because most of what a room costs is
+the process holding it rather than the term inside.
+
 ## Checks
 
 ```sh

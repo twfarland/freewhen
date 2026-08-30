@@ -88,8 +88,11 @@ answer(Room, Command) ->
         exit:_Reason -> [{text, fw_room_json:closed(expired)}, close]
     end.
 
-%% A room that stopped normally expired or was finalised; anything else failed.
+%% Why the room went away. Cancelled is kept distinct from expired because a
+%% host's own browser reopens a room it thinks was lost — and would otherwise
+%% resurrect the meeting it had just called off.
 ended(normal) -> expired;
+ended({shutdown, cancelled}) -> cancelled;
 ended(_Reason) -> failed.
 
 socket_opts(Opts) ->

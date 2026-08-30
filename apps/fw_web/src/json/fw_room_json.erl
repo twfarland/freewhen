@@ -9,7 +9,9 @@ it is being published and the transport has no idea what it is publishing.
     {type: join,   alias}                   {type: state,  room}
     {type: submit, attendeeId, free}        {type: joined, attendeeId}
     {type: pick,   hostToken, slot}         {type: error,  reason}
-                                            {type: closed, reason}
+    {type: unpick, hostToken}               {type: closed, reason}
+    {type: excludeSilent, hostToken}
+    {type: cancel, hostToken}
 
 No correlation ids: a connection watches one room, and the only reply anyone
 waits for is the id they get back from joining. Every change sends the whole
@@ -59,6 +61,12 @@ decode(#{<<"type">> := <<"pick">>, <<"hostToken">> := Token, <<"slot">> := Slot}
     is_binary(Token), is_integer(Slot)
 ->
     {ok, {pick, Slot, Token}};
+decode(#{<<"type">> := <<"unpick">>, <<"hostToken">> := Token}) when is_binary(Token) ->
+    {ok, {unpick, Token}};
+decode(#{<<"type">> := <<"excludeSilent">>, <<"hostToken">> := Token}) when is_binary(Token) ->
+    {ok, {exclude_silent, Token}};
+decode(#{<<"type">> := <<"cancel">>, <<"hostToken">> := Token}) when is_binary(Token) ->
+    {ok, {cancel, Token}};
 decode(_Unrecognised) ->
     {error, <<"unrecognised message">>}.
 
@@ -72,6 +80,7 @@ submitted(Id, Free) ->
 
 room(Room) ->
     #{
+        <<"phase">> => atom_to_binary(fw_schedule:phase(Room)),
         <<"grid">> => grid(fw_room:grid(Room)),
         <<"durationSlots">> => fw_room:duration_slots(Room),
         <<"attendees">> => [attendee(A) || A <- fw_room:attendees(Room)],

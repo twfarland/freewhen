@@ -42,41 +42,42 @@ This file is only what is left.
    attendee list deliberately carries no ids, so an alias is the only thing a
    browser can match itself on — which makes uniqueness a domain rule.
 
-   The projection has since been split out into `fw_schedule`, so `fw_room` is
-   at 192 lines with room to add the check. Nothing is blocking this now
-   except the work: a `taken/2` over the attendee aliases, an `alias_taken`
-   error, and the client message to match.
+   `fw_roster` is now the obvious home for it: a `taken/2` over the aliases it
+   already holds, an `alias_taken` error, and the client message to match.
 
-3. **Run the playbook against a real machine.** Every deployment decision is
+3. **A roster of who was invited.** "Everybody has answered" currently means
+   everybody who turned up, so a host still cannot tell that Dave never opened
+   the link at all — the one thing email ping-pong does better. Names the host
+   types at creation would close it, with the invitations still going out
+   through their own mail client so no address reaches the server. Per-person
+   links were considered and rejected: a per-person token is an identity, and
+   it is more work for the host, not less.
+
+4. **Run the playbook against a real machine.** Every deployment decision is
    reasoned and none has met an actual Ubuntu box. Provision a throwaway
    Hetzner instance, run `site.yml`, then `reboot.yml`, and find out what the
    reasoning missed. Until then the deployment is a design, not a capability.
 
 ## Known limits
 
-- **One machine is the capacity and the failure domain.** A room is 2.8 kB for
-  an ordinary week, so the 20,000-room ceiling costs about 56 MB in practice
-  and 800 MB against crafted input — under the 4 GB the machine has, but no
-  longer by a wide margin. Nothing replaces the machine if it dies; someone has
-  to notice and re-run the playbook.
+- **One machine is the capacity and the failure domain.** Measured at the
+  ceiling, 20,000 rooms cost 242 MB in ordinary use and about 1.15 GB against
+  crafted input — under the 4 GB the machine has, but not by much, and a bigger
+  `max_rooms` would not fit. Nothing replaces the machine if it dies; someone
+  has to notice and re-run the playbook.
 - **Durability stops at the disk.** It survives deploys and reboots, not the
   loss of the machine. Resume is the layer beneath, and that needs the host's
   tab open.
 - **Room state exists at rest for up to a month.** Aliases and availability in
   one 0700 file, deleted per room the moment the room ends — but a room now
-  ends when the meeting is settled or after a month idle, not within a day.
+  ends a day after the meeting it scheduled, or after a month idle.
   That is a materially longer exposure than the original design had, and it is
   the honest cost of letting coordination take as long as it really takes.
 - **An unattended-upgrades reboot is a restart**, at 04:00 UTC, and only
   affordable because of the snapshot.
 - **Anyone with a room link can join under any alias**, and can join twice on
   purpose to weight the counts. Same trust model as a shared document link;
-  the attendee cap and the 24-hour life bound it.
-- **The exported invitation puts the room hash in a jit.si URL.** Anyone
-  holding the `.ics` — and jit.si itself, once someone clicks — learns the
-  room's address. The room dies a day after a time is picked, so the capability
-  is nearly spent, but it is a disclosure and the provider is hardcoded. A
-  product decision worth re-taking.
+  the attendee cap bounds it.
 - **The server is not zero-knowledge**, and the README no longer implies it is.
   It holds each person's availability in order to add it up. What is true is
   that no participant receives another's row, that it is never logged, and that

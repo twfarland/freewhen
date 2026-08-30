@@ -1,15 +1,14 @@
 // The invitation, built in the browser and downloaded from it.
 //
-// The server never sees this file, never learns the meeting link, and is not
-// asked to email anyone. Once a slot is picked there is nothing left for it to
-// do, which is why it is allowed to forget the room minutes later.
+// The server never sees this file and is not asked to email anyone. Once a
+// slot is picked there is nothing left for it to do.
+//
+// No meeting link: picking a video provider for other people is not this
+// tool's job, and putting the room hash in a third party's URL handed out the
+// room's address with it.
 //
 // The two instants come from the server already decided, in UTC, so this
 // writes them out and does no arithmetic.
-
-export function meetingUrl(hash: string): string {
-  return `https://meet.jit.si/freewhen-${hash}`
-}
 
 export function invite(startsAt: number, endsAt: number, hash: string): string {
   return [
@@ -21,9 +20,7 @@ export function invite(startsAt: number, endsAt: number, hash: string): string {
     `DTSTAMP:${stamp(Date.now())}`,
     `DTSTART:${stamp(startsAt)}`,
     `DTEND:${stamp(endsAt)}`,
-    'SUMMARY:FreeWhen meeting',
-    `URL:${meetingUrl(hash)}`,
-    `DESCRIPTION:Join at ${meetingUrl(hash)}`,
+    'SUMMARY:Meeting',
     'END:VEVENT',
     'END:VCALENDAR',
   ].join('\r\n')

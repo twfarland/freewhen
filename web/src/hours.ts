@@ -23,11 +23,3 @@ export function asClock(minutes: number): string {
   const hour = Math.floor(minutes / 60)
   return `${String(hour).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
 }
-
-/** The reverse, refusing anything an input could hand back malformed. */
-export function fromClock(value: string): number | undefined {
-  const match = /^(\d{2}):(\d{2})$/.exec(value)
-  if (match === null) return undefined
-  const minutes = Number(match[1]) * 60 + Number(match[2])
-  return minutes >= 0 && minutes <= 1440 ? minutes : undefined
-}

@@ -64,19 +64,37 @@ the_busiest_window_comes_first_test() ->
     Windows = [#{start => 0, free => 1}, #{start => 1, free => 3}, #{start => 2, free => 2}],
     ?assertEqual(
         [#{start => 1, free => 3}, #{start => 2, free => 2}, #{start => 0, free => 1}],
-        fw_heatmap:best(Windows, 5)
+        fw_heatmap:best(Windows, 1, 5)
     ).
 
 equally_attended_windows_are_ordered_earliest_first_test() ->
     Windows = [#{start => 5, free => 2}, #{start => 1, free => 2}, #{start => 3, free => 2}],
     ?assertEqual(
         [#{start => 1, free => 2}, #{start => 3, free => 2}, #{start => 5, free => 2}],
-        fw_heatmap:best(Windows, 5)
+        fw_heatmap:best(Windows, 1, 5)
     ).
 
 a_window_nobody_can_attend_is_not_offered_test() ->
-    ?assertEqual([], fw_heatmap:best([#{start => 0, free => 0}], 5)).
+    ?assertEqual([], fw_heatmap:best([#{start => 0, free => 0}], 1, 5)).
 
 only_the_limit_is_returned_test() ->
     Windows = [#{start => S, free => 1} || S <- lists:seq(0, 9)],
-    ?assertEqual(3, length(fw_heatmap:best(Windows, 3))).
+    ?assertEqual(3, length(fw_heatmap:best(Windows, 1, 3))).
+
+%% Five suggestions that are five consecutive half hours of one morning are
+%% one suggestion. The best of a cluster is kept and the rest of it dropped.
+suggestions_nearer_than_the_separation_are_one_suggestion_test() ->
+    Windows = [#{start => S, free => 2} || S <- lists:seq(0, 20)],
+    ?assertEqual(
+        [#{start => 0, free => 2}, #{start => 8, free => 2}, #{start => 16, free => 2}],
+        fw_heatmap:best(Windows, 8, 5)
+    ).
+
+%% Separation must not cost the best answer: a busier window further out still
+%% wins the cluster it belongs to.
+the_best_of_a_cluster_is_the_one_kept_test() ->
+    Windows = [#{start => 0, free => 1}, #{start => 2, free => 4}, #{start => 12, free => 2}],
+    ?assertEqual(
+        [#{start => 2, free => 4}, #{start => 12, free => 2}],
+        fw_heatmap:best(Windows, 8, 5)
+    ).

@@ -12,14 +12,13 @@
 
 import { render } from 'lit'
 import { DEFAULT_HOURS, areHours } from './hours.ts'
-import type { Hours } from './hours.ts'
 import { download, invite } from './invite.ts'
 import { decodeMask, emptyMask, encodeMask, preset as presetMask, setSlot } from './mask.ts'
-import { recall, remember } from './memory.ts'
+import { forget, recall, remember } from './memory.ts'
 import type { Memory } from './memory.ts'
 import { openRoom } from './protocol.ts'
 import type { Grid, RoomShape, ServerMessage } from './protocol.ts'
-import { accepted, errored, opened } from './session.ts'
+import { accepted, connected, errored, opened, restoring } from './session.ts'
 import type { Session } from './session.ts'
 import { connect } from './socket.ts'
 import type { Connection } from './socket.ts'
@@ -56,11 +55,20 @@ let state: State = {
   // A stored preference from an older release, or a hand-edited one, must not
   // be able to produce a preset that selects nothing.
   hours: areHours(stored.hours) ? stored.hours : DEFAULT_HOURS,
+  // A host who has not yet sent the link has one job, and it is that.
+  sent: stored.hostToken === undefined || session.joined,
+  callingOff: false,
 }
 
 let connection: Connection | undefined
 let pending: number | undefined
 let resuming = false
+
+// A meeting that was called off must stay called off. The socket closing is
+// otherwise indistinguishable from the server having gone away, and reopening
+// is exactly the wrong thing to do: the host's own browser holds the token the
+// address derives from, so it would resurrect the meeting it just deleted.
+let calledOff = false
 
 function update(patch: Partial<State>): void {
   state = { ...state, ...patch }
@@ -98,15 +106,6 @@ const actions: Actions = {
     submit()
   },
 
-  setHours: (hours: Hours) => {
-    if (!areHours(hours)) {
-      update({ notice: 'A day has to end after it starts.' })
-      return
-    }
-    if (state.hash !== undefined) remember(state.hash, { hours })
-    update({ hours, notice: '' })
-  },
-
   paint: (slot, free) => {
     if (state.mine === undefined) return
     const mine = Uint8Array.from(state.mine)
@@ -115,9 +114,37 @@ const actions: Actions = {
     submit()
   },
 
+  sent: () => {
+    update({ sent: true })
+  },
+
   pick: (slot) => {
     const hostToken = memory().hostToken
     if (hostToken !== undefined) connection?.send({ type: 'pick', hostToken, slot })
+  },
+
+  unpick: () => {
+    const hostToken = memory().hostToken
+    if (hostToken !== undefined) connection?.send({ type: 'unpick', hostToken })
+  },
+
+  excludeSilent: () => {
+    const hostToken = memory().hostToken
+    if (hostToken !== undefined) connection?.send({ type: 'excludeSilent', hostToken })
+  },
+
+  askCallOff: () => {
+    update({ callingOff: true })
+  },
+
+  keepIt: () => {
+    update({ callingOff: false })
+  },
+
+  callOff: () => {
+    const hostToken = memory().hostToken
+    update({ callingOff: false })
+    if (hostToken !== undefined) connection?.send({ type: 'cancel', hostToken })
   },
 
   copyLink: () => {
@@ -133,9 +160,12 @@ const actions: Actions = {
 
 async function create(form: HTMLFormElement): Promise<void> {
   const data = new FormData(form)
-  const slotMinutes = Number(data.get('slotMinutes'))
   const days = Number(data.get('days'))
   const minutes = Number(data.get('duration'))
+  // Granularity follows the meeting rather than being a third question: half
+  // hours unless the meeting is shorter than one, and nobody has ever wanted
+  // to say when they are free to the quarter hour for an hour-long meeting.
+  const slotMinutes = minutes < 30 ? 15 : 30
   const shape: RoomShape = {
     startsAt: startOfNextHour(),
     slotMinutes,
@@ -149,7 +179,7 @@ async function create(form: HTMLFormElement): Promise<void> {
     remember(created.hash, { hostToken: created.hostToken, shape })
     location.href = `/m/#${created.hash}`
   } catch (error) {
-    const notice = error instanceof Error ? error.message : 'could not create the room'
+    const notice = error instanceof Error ? error.message : 'Could not create the meeting.'
     update({ busy: false, notice })
   }
 }
@@ -186,20 +216,20 @@ function sendAvailability(): void {
  */
 async function resume(): Promise<void> {
   const { hostToken, shape } = memory()
-  if (resuming || hostToken === undefined || shape === undefined) return
+  if (calledOff || resuming || hostToken === undefined || shape === undefined) return
   resuming = true
-  update({ notice: 'the server restarted — reopening this room…' })
+  update({ notice: 'The server restarted — reopening this meeting…' })
   try {
     await openRoom(shape, hostToken)
     connection?.retryNow()
   } catch {
-    update({ notice: 'could not reopen this room.' })
+    update({ notice: 'Could not reopen this meeting.' })
   } finally {
     resuming = false
   }
 }
 
-/** Hand back whatever this browser was holding. */
+/** Hand back whatever this browser was holding. Once per connection. */
 function restore(): void {
   const { attendeeId, free } = memory()
   if (attendeeId === undefined || free === undefined) return
@@ -216,26 +246,45 @@ function onMessage(message: ServerMessage): void {
         mine: state.mine ?? storedMask(message.room.grid),
         notice: '',
       })
-      restore()
+      const owed = restoring(session)
+      session = owed.session
+      if (owed.resubmit) restore()
       return
     case 'joined':
-      session = accepted()
+      session = accepted(session)
       if (state.hash !== undefined) remember(state.hash, { attendeeId: message.attendeeId })
       update({ joined: session.joined })
-      sendAvailability()
+      // Hand back an answer this browser was already holding, and nothing
+      // else. Submitting the empty mask a fresh joiner starts with would mark
+      // them as having answered the moment they arrived, which is exactly what
+      // the gate on choosing a time exists to prevent.
+      restore()
       return
     case 'error':
       onError(message.reason)
       return
     case 'closed':
-      update({ notice: message.reason === 'expired' ? 'This room has ended.' : 'This room failed.' })
+      // Called off is not the same as lost. Nothing this browser holds is
+      // worth keeping, and holding the host token would let a reload reopen
+      // the very meeting that was deleted.
+      if (message.reason === 'cancelled') {
+        calledOff = true
+        if (state.hash !== undefined) forget(state.hash)
+        connection?.close()
+        update({ room: undefined, notice: 'This meeting was called off.' })
+        return
+      }
+      update({
+        notice: message.reason === 'expired' ? 'This meeting has ended.' : 'This meeting failed.',
+      })
       void resume()
       return
   }
 }
 
 function onError(reason: string): void {
-  const reaction = errored(session, reason, memory().alias)
+  const { alias, free } = memory()
+  const reaction = errored(session, reason, { alias, answered: free !== undefined })
   session = reaction.session
   if (reaction.rejoinAs !== undefined) {
     connection?.send({ type: 'join', alias: reaction.rejoinAs })
@@ -252,15 +301,15 @@ function storedMask(grid: Grid): Uint8Array {
 
 function readable(reason: string): string {
   const messages: Record<string, string> = {
-    full: 'This room is full.',
-    finalized: 'A time has already been chosen.',
-    expired: 'This room has ended.',
-    forbidden: 'Only the person who started this room can choose a time.',
+    full: 'This meeting is full.',
+    still_waiting: 'Everyone has to say when they are free before a time can be chosen.',
+    expired: 'This meeting has ended.',
+    forbidden: 'Only the person who started this meeting can choose a time.',
     duplicate: 'You have already joined.',
     bad_alias: 'That name will not work — up to 32 ordinary characters, please.',
-    bad_slot: 'That availability did not match this room. Reload and try again.',
+    bad_slot: 'That availability did not match this meeting. Reload and try again.',
     too_fragmented: 'That is too many separate blocks — try marking longer stretches.',
-    unknown_attendee: 'You are not in this room any more. Reload to rejoin.',
+    unknown_attendee: 'You are no longer in this meeting. Reload to rejoin.',
   }
   return messages[reason] ?? reason
 }
@@ -271,6 +320,7 @@ if (hash !== undefined) {
   connection = connect(hash, {
     status: (status) => {
       update({ status })
+      if (status === 'open') session = connected(session)
       if (status === 'closed') void resume()
     },
     message: onMessage,

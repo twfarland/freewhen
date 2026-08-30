@@ -90,24 +90,78 @@ ranch supervises the connection processes itself.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Open: POST /api/rooms
-  Open --> Open: join · submit — each pushes the deadline out
-  Open --> Settled: pick (host token)
-  Open --> [*]: 30 days idle
-  Settled --> [*]: 24h grace
-  Open --> [*]: crash — URL stops working
+  direction LR
+  [*] --> Collecting: POST /api/rooms
+
+  state Arranging {
+    Collecting --> Collecting: join · submit
+    Collecting --> Ready: everybody here has answered
+    Collecting --> Ready: exclude silent (host)
+    Ready --> Collecting: somebody new joins
+    Ready --> Confirmed: pick — everybody is free then
+    Ready --> Provisional: pick — somebody is not
+    Confirmed --> Provisional: an answer changes · somebody joins
+    Provisional --> Confirmed: an answer changes back
+    Confirmed --> Ready: unpick
+    Provisional --> Ready: unpick
+  }
+
+  Arranging --> [*]: cancel (host)
+  Arranging --> [*]: 30 days idle · 24h past the meeting
+  Arranging --> [*]: crash — the URL stops working
 ```
 
-**A room lives on idleness, not age.** Every change pushes `expires_at` out by
-`idle_ms`, because coordinating a meeting between organisations genuinely takes
-weeks and a room that died mid-negotiation would be worse than useless. Only a
-change counts: opening the link to look does not keep a dead room alive.
+**Only four things are stored**: the roster, the picked slot, whether it was
+cancelled, and the idle deadline. The phase in the diagram is derived from them
+by `fw_schedule:phase/1` on every read and written down nowhere, so a room can
+never claim to be confirmed while somebody's own answer says otherwise.
 
-`expires_at` lives in the domain and `fw_room_server` takes its timer from
-`fw_room:expires_at/1` rather than from config, so there is one source of truth
-about when a room ends. Picking makes the room read-only immediately and swaps
-the idle window for a fixed grace — long enough that people who were not
-watching still see what was decided and can download the invitation.
+| command | who | refused when |
+|---|---|---|
+| `join` | anyone with the link | the room has ended · full · duplicate id |
+| `submit` | that attendee | the room has ended · not in the room |
+| `pick` | the host | **anybody here has not answered** · not a window |
+| `unpick` | the host | the room has ended |
+| `exclude_silent` | the host | the room has ended |
+| `cancel` | the host | the room has ended |
+
+**Everybody here answers before a time can be chosen.** Choosing while somebody
+is still deciding is how a meeting gets booked over the one person who could
+not make it. The gate has exactly one way past — `exclude_silent`, for somebody
+who opened the link and went away — and without it the gate would deadlock a
+meeting on one abandoned tab. It names nobody: the host says "go ahead without
+them" and the room works out who that is, so no attendee id has to be published
+for it.
+
+**There is no acceptance step.** Availability already says "I can make that", so
+a separate acceptance would be a second source of truth for the same fact and
+the two would drift — a room could show Bob accepting a time his own
+availability says he is busy for. Instead, confirmation is derived: the moment
+somebody edits their answer out from under a chosen time, the room says so.
+Acceptance proper happens in the calendar invitation this exports to, which is
+where people RSVP anyway.
+
+**A chosen time is an answer, not an ending.** The most ordinary event in
+scheduling is a time being agreed and then pushed, so the room stays open: the
+host may unpick or pick again, latecomers may still join, and anyone whose
+plans changed may still edit their availability. An earlier version locked the
+room on the pick and ran a 24-hour grace *from the decision* — which deleted a
+room three weeks before the meeting it had scheduled, exactly when somebody
+would need to move it.
+
+**A room lives on idleness, not age.** Every change pushes the idle deadline out
+by `idle_ms`, because coordinating between organisations genuinely takes weeks.
+Only a change counts: opening the link to look does not keep a dead room alive.
+`fw_room:expires_at/1` is the later of two deadlines — the idle one, and
+`grace_ms` past the end of the chosen window — and collapses to zero when the
+meeting is called off. `fw_room_server` takes its timer from that one function
+and recomputes it after every change, in either direction, because unpicking
+can bring a room's end closer.
+
+Cancelling stops the room with `{shutdown, cancelled}` rather than letting the
+deadline do it, because the exit reason is what reaches every watcher. A host's
+own browser reopens a room it believes was lost, and would otherwise resurrect
+the meeting it had just called off.
 
 The month is bounded by `erlang:send_after/3`, which cannot be given more than
 49 days.
@@ -130,14 +184,16 @@ the host token safely has to happen where the rule lives.)
 | `fw_grid` | the time grid, and the UTC instant of any slot or window |
 | `fw_availability` | when one attendee is free, as stretches of time |
 | `fw_attendee` | an id, an alias, and possibly an answer |
+| `fw_roster` | who is in a meeting, and whether they have all answered |
 | `fw_heatmap` | free-counts per slot, windows, and their ranking |
 | `fw_proposal` | a meeting time: when it is, and how many can be there |
 | `fw_room` | the aggregate, and every rule about what may happen |
 | `fw_schedule` | what a room looks like to the people in it |
 
-`fw_room` is the only module that decides anything; `fw_schedule` derives the
-published view from it through the same public accessors any caller has, so
-changing what is shown cannot reach a rule by accident.
+`fw_room` is the only module that decides anything. `fw_roster` holds the
+bookkeeping the rules ask questions of, and `fw_schedule` derives the published
+view through the same public accessors any caller has, so changing what is
+shown cannot reach a rule by accident.
 
 ### `fw_runtime` — rooms as processes
 
@@ -176,15 +232,19 @@ implementation and no prospect of a second is ceremony.
 ## The protocol
 
 Documented in `fw_room_json`, which is the only module on either side that
-knows the shape. Three messages in, four out, no correlation ids, and every
+knows the shape. Six messages in, four out, no correlation ids, and every
 change sends the whole room already computed.
 
 ```
 client -> server                      server -> client
-{type: join,   alias}                 {type: state,  room}
-{type: submit, attendeeId, free}      {type: joined, attendeeId}
-{type: pick,   hostToken, slot}       {type: error,  reason}
-                                      {type: closed, reason}
+{type: join,          alias}          {type: state,  room}
+{type: submit,        attendeeId,     {type: joined, attendeeId}
+                      free}           {type: error,  reason}
+{type: pick,          hostToken,      {type: closed, reason}
+                      slot}
+{type: unpick,        hostToken}
+{type: excludeSilent, hostToken}
+{type: cancel,        hostToken}
 ```
 
 A successful command sends no reply of its own; the `state` that follows is the
@@ -193,6 +253,11 @@ exactly one way for a client to learn what happened. A snapshot is about a
 kilobyte for a handful of people, so the bandwidth a diff would save is not
 worth the machinery on both sides.
 
+The published room carries a `phase` — `collecting`, `ready`, `confirmed` or
+`provisional` — because the server decides and the browser formats. Working out
+from the attendee list whether everybody had answered would be the same rule
+implemented twice, in two languages, and the two would eventually disagree.
+
 **Attendee ids are never published.** An id is a capability — whoever holds one
 may replace that person's availability — so the attendee list carries an alias
 and whether that person has answered, and nothing else. An integration test
@@ -200,19 +265,25 @@ asserts the id does not appear in the JSON.
 
 ## What a room costs
 
-Measured, not estimated, for a full week at quarter-hour resolution:
+Measured at the ceiling with `bench/load.escript`, not extrapolated from one
+room — an earlier estimate did that and was **4x low**, because the cost of a
+room is mostly the process holding it (heap, directory entry, monitors, timer)
+rather than the term inside.
 
-| room | in memory | snapshot |
-|---|---|---|
-| 8 attendees, ordinary working week | 2.8 kB | 1.4 kB |
-| 16 attendees, maximally fragmented | 40 kB | ~25 kB |
+| 20,000 rooms | per room | total RAM | snapshot | restore at boot |
+|---|---|---|---|---|
+| 8 attendees, ordinary week | 12.4 kB | 242 MB | 37 MB | 2.7s |
+| 16 attendees, maximally fragmented | 58.8 kB | ~1.15 GB | ~205 MB | ~12s |
 
-Because rooms live on idleness, `max_rooms` now holds a **month** of them
-rather than a day: 20,000 is roughly 660 new rooms a day sustained. That is
-about 56 MB of RAM for real usage and 800 MB for rooms full of crafted answers,
-which is why the systemd unit allows 1536M. Memory is the binding constraint,
-and `max_attendees_per_room` is 16 rather than 64 for the same reason — the
-worst case multiplies by it.
+Because rooms live on idleness, `max_rooms` holds a **month** of them rather
+than a day: 20,000 is roughly 660 new rooms a day sustained. `MemoryMax=2G` in
+the systemd unit is sized against the adversarial row, and
+`max_attendees_per_room` is 16 rather than 64 because the worst case multiplies
+by it.
+
+Creation runs at about 2,000 rooms a second, so the cap is reached in seconds
+by anything that means to. Restore is dead time before the listener opens on
+every deploy and every 04:00 reboot.
 
 Snapshot writes are debounced to one every two seconds per room, so a drag
 across the grid costs one write rather than one per cell and no disk write sits

@@ -5,8 +5,8 @@ signing up for anything or leaving a record.
 
 Everyone drags across a grid to say when they are free, a quarter hour at a
 time. The server intersects the answers in memory, shows how many people are
-free in each slot — never which people — and deletes the room once the meeting
-is settled. There are no accounts and no database, and nothing about a meeting
+free in each slot — never which people — and deletes the room a day after the
+meeting it scheduled. There are no accounts and no database, and nothing about a meeting
 outlives the arranging of it.
 
 ## How it works
@@ -14,19 +14,29 @@ outlives the arranging of it.
 1. Someone creates a room and gets a link. No account.
 2. Everyone opens the link and picks a name others will recognise —
    "Blue Falcon", not their own.
-3. Each person clicks a preset — "weekdays 9–5", and the hours are theirs to
-   set — then drags across the grid to fix the exceptions, or arrows around it
-   and presses space. Only packed bits go over the wire.
+3. Each person clicks a preset — "weekdays 9–5" — then drags across the grid
+   to fix the exceptions, or arrows around it and presses space. Only packed
+   bits go over the wire.
 4. The heatmap shows how many people are free in each slot, in each viewer's
    own timezone. It never shows *which* people. Every suggested time is
    labelled in everyone's local time, so nobody has to do the arithmetic.
-5. Whoever created the room picks a slot and everyone downloads an invitation
-   with a video link in it.
-6. The room deletes itself once a time is chosen, or after a month with nobody
-   touching it. Every change resets that month — arranging a meeting between
-   organisations really can take weeks, and a room that expired mid-negotiation
-   would be worse than useless. Deploying the server does not count: rooms are
-   snapshotted locally so a release does not take them with it.
+5. **Once everybody has answered**, whoever created the room picks a time and
+   everyone downloads an invitation. Not before: choosing while somebody is
+   still deciding is how a meeting gets booked over the one person who could
+   not make it. If somebody opened the link and went away, the host can go
+   ahead without them — nobody is named to do it.
+6. **A chosen time is an answer, not an ending.** Plans change, so the host can
+   move it, and anyone whose availability changes invalidates it automatically:
+   the meeting simply starts saying "only 3 of 4 can make this". There is no
+   separate acceptance to keep in step — the calendar invitation this exports
+   is where people RSVP.
+7. The host can call the whole thing off, which deletes it for everyone at
+   once. Otherwise the room deletes itself a day after the meeting it
+   scheduled, or after a month with nobody touching it. Every change resets
+   that month — arranging a meeting between organisations really can take
+   weeks, and a room that expired mid-negotiation would be worse than useless.
+   Deploying the server does not count: rooms are snapshotted locally so a
+   release does not take them with it.
 
 ## What the server never sees
 
@@ -43,8 +53,9 @@ stretches of time they said they were free. It is kept in RAM and mirrored to
 one local file so a deploy or a reboot does not destroy your meeting — the only
 thing written anywhere, deleted per room the moment the room ends.
 
-Be clear about what that means: a room lives until the meeting is settled, or a
-month with nobody touching it. So the honest claim is **nothing outlives the
+Be clear about what that means: a room lives until a day after the meeting it
+scheduled, or a month with nobody touching it. Choosing a time does not close
+it — plans change, and the link has to still work when they do. So the honest claim is **nothing outlives the
 arranging of the meeting**, not "nothing outlives the day". Coordination
 genuinely takes weeks sometimes, and pretending otherwise would just mean
 losing people's rooms.

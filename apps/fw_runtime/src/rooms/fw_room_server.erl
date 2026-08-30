@@ -3,15 +3,15 @@
 One room, one process, all of it in memory.
 
 No logic here: decode a command, call `fw_room`, keep the answer, tell the
-watchers. Every rule lives in the domain, which is why nothing below branches
-on room state. Watchers get `fw_room:t()` — the domain value, not JSON — so
+watchers. Every rule lives in the domain; the only two things below that read
+room state read a decision the domain already made — when it ends, and whether
+it was called off. Watchers get `fw_room:t()` — the domain value, not JSON — so
 this layer stays ignorant of the wire, and they are monitored so a connection
 that goes away is forgotten without anyone saying so.
 
-A room lives on idleness: the timer comes from `fw_room:expires_at/1`, which
-every change pushes out, so the domain stays the single source of truth about
-when a room ends. Picking a slot settles it and swaps the idle window for a
-fixed grace — a settled room is no longer a negotiation.
+The timer comes from `fw_room:expires_at/1` and is recomputed after every
+change, so the domain stays the single source of truth about when a room ends —
+including the case where a chosen slot keeps the room alive past its idleness.
 """.
 
 -behaviour(gen_server).
@@ -25,14 +25,16 @@ fixed grace — a settled room is no longer a negotiation.
 -type args() :: #{
     hash := fw_room_store:hash(),
     room := fw_room:t(),
-    grace_ms := pos_integer(),
     snapshots := module()
 }.
 
 -type command() ::
     {join, fw_attendee:alias()}
     | {submit, fw_attendee:id(), [fw_grid:slot()]}
-    | {pick, fw_grid:slot(), fw_room:token()}.
+    | {pick, fw_grid:slot(), fw_room:token()}
+    | {unpick, fw_room:token()}
+    | {exclude_silent, fw_room:token()}
+    | {cancel, fw_room:token()}.
 
 -type result() :: ok | {joined, fw_attendee:id()}.
 
@@ -41,10 +43,8 @@ fixed grace — a settled room is no longer a negotiation.
     room :: fw_room:t(),
     watchers :: #{reference() => pid()},
     timer :: reference(),
-    grace_ms :: pos_integer(),
     snapshots :: module(),
-    unwritten :: boolean(),
-    phase :: live | settled
+    unwritten :: boolean()
 }).
 
 %% How long a change may go unwritten. Writing on every change would put a disk
@@ -69,7 +69,7 @@ command(Room, Command) -> gen_server:call(Room, {command, Command}).
 %%% ---- gen_server ----
 
 -spec init(args()) -> {ok, #state{}}.
-init(#{hash := Hash, room := Room, grace_ms := Grace, snapshots := Snapshots}) ->
+init(#{hash := Hash, room := Room, snapshots := Snapshots}) ->
     _Trap = process_flag(trap_exit, true),
     Remaining = max(0, fw_room:expires_at(Room) - fw_clock:now_ms()),
     State = #state{
@@ -77,10 +77,8 @@ init(#{hash := Hash, room := Room, grace_ms := Grace, snapshots := Snapshots}) -
         room = Room,
         watchers = #{},
         timer = erlang:send_after(Remaining, self(), expired),
-        grace_ms = Grace,
         snapshots = Snapshots,
-        unwritten = false,
-        phase = live
+        unwritten = false
     },
     %% Written immediately, not on first change: a room nobody has touched yet
     %% is still a room, and losing it to a release would be the same failure.
@@ -88,16 +86,25 @@ init(#{hash := Hash, room := Room, grace_ms := Grace, snapshots := Snapshots}) -
     _Timer = erlang:send_after(?SNAPSHOT_EVERY_MS, self(), snapshot),
     {ok, State}.
 
+-type reply() :: {ok, result()} | {error, fw_room:error()}.
+
 -spec handle_call({watch, pid()}, gen_server:from(), #state{}) ->
                      {reply, {ok, fw_room:t()}, #state{}};
                  ({command, command()}, gen_server:from(), #state{}) ->
-                     {reply, {ok, result()} | {error, fw_room:error()}, #state{}}.
+                     {reply, reply(), #state{}}
+                     | {stop, {shutdown, cancelled}, reply(), #state{}}.
 handle_call({watch, Watcher}, _From, #state{room = Room, watchers = Watchers} = State) ->
     Monitor = erlang:monitor(process, Watcher),
     {reply, {ok, Room}, State#state{watchers = Watchers#{Monitor => Watcher}}};
-handle_call({command, Command}, _From, State) ->
+handle_call({command, Command}, _From, #state{} = State) ->
     {Reply, Next} = run(Command, State),
-    {reply, Reply, Next}.
+    ending(fw_room:cancelled(Next#state.room), Reply, Next).
+
+%% Cancelling is the one command that ends the room. The watchers already have
+%% the final state in their mailboxes, and the exit reason is what tells a
+%% meeting called off from one that ran out of time.
+ending(true, Reply, State) -> {stop, {shutdown, cancelled}, Reply, State};
+ending(false, Reply, State) -> {reply, Reply, State}.
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 handle_cast(Unexpected, State) ->
@@ -133,7 +140,13 @@ decide({join, Alias}, Now, Room) ->
 decide({submit, Id, FreeSlots}, Now, Room) ->
     changed(fw_room:submit(Id, FreeSlots, Now, Room));
 decide({pick, Slot, Token}, Now, Room) ->
-    changed(fw_room:pick(Slot, Token, Now, Room)).
+    changed(fw_room:pick(Slot, Token, Now, Room));
+decide({unpick, Token}, Now, Room) ->
+    changed(fw_room:unpick(Token, Now, Room));
+decide({exclude_silent, Token}, Now, Room) ->
+    changed(fw_room:exclude_silent(Token, Now, Room));
+decide({cancel, Token}, Now, Room) ->
+    changed(fw_room:cancel(Token, Now, Room)).
 
 changed({ok, Room}) -> {ok, ok, Room};
 changed({error, Reason}) -> {error, Reason}.
@@ -153,32 +166,30 @@ written(#state{hash = Hash, room = Room, snapshots = Snapshots}) ->
 
 %%% ---- lifetime ----
 
-%% A room lives on idleness, so every change moves its deadline; once a slot is
-%% picked it stops being a negotiation and runs out a fixed grace instead.
-lifetime(#state{phase = settled} = State) ->
-    State;
-lifetime(#state{room = Room, grace_ms = Grace} = State) ->
-    case fw_room:picked(Room) of
-        undefined -> deadline(fw_room:expires_at(Room) - fw_clock:now_ms(), State);
-        _Slot -> (deadline(Grace, State))#state{phase = settled}
-    end.
-
-deadline(In, #state{timer = Timer} = State) ->
+%% Every change moves the deadline, in either direction: unpicking a slot can
+%% bring a room's end closer, so this recomputes rather than only extending.
+lifetime(#state{room = Room, timer = Timer} = State) ->
     _Cancelled = erlang:cancel_timer(Timer),
-    State#state{timer = erlang:send_after(max(0, In), self(), expired)}.
+    In = max(0, fw_room:expires_at(Room) - fw_clock:now_ms()),
+    State#state{timer = erlang:send_after(In, self(), expired)}.
 
 -doc """
 A room that ended on purpose leaves nothing behind; any other reason keeps the
-snapshot. `normal` is expiry or a settled room past its grace. A shutdown is
-the node going down for a release, and forgetting on that reason would erase
-every room during exactly the event snapshots exist for.
+snapshot. On purpose is the deadline passing (`normal`) or the host calling the
+meeting off. A bare `shutdown` is the node going down for a release, and
+forgetting on that reason would erase every room during exactly the event
+snapshots exist for.
 """.
 -spec terminate(term(), #state{}) -> ok.
-terminate(normal, #state{hash = Hash, snapshots = Snapshots}) ->
-    Snapshots:forget(Hash);
+terminate(normal, State) ->
+    forgotten(State);
+terminate({shutdown, cancelled}, State) ->
+    forgotten(State);
 terminate(_NotOurDoing, State) ->
     _Flushed = flushed(State),
     ok.
+
+forgotten(#state{hash = Hash, snapshots = Snapshots}) -> Snapshots:forget(Hash).
 
 %% Only the shape of an unexpected message is logged: its contents could carry
 %% a room hash, and nothing identifying a room may reach the log.

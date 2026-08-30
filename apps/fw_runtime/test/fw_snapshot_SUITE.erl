@@ -137,7 +137,8 @@ long_expired() ->
             duration_slots => 2,
             host_token => <<"whatever">>,
             capacity => 4,
-            idle_ms => 1
+            idle_ms => 1,
+            grace_ms => 1
         },
         0
     ),

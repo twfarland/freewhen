@@ -10,9 +10,9 @@ machine. Why it is shaped this way is [ARCHITECTURE.md](ARCHITECTURE.md).
 ## The machine, once
 
 A **Hetzner CX22** (2 vCPU, 4 GB) running **Ubuntu 24.04**, your SSH key, and
-an `A` record. The measured worst case is about 800 MB of room state at the
-configured caps, so 4 GB leaves real headroom; anything smaller means lowering
-`max_rooms` to match.
+an `A` record. The measured worst case is about 1.15 GB of room state at the
+configured caps, so 4 GB is the smallest size that fits it with the OS and
+Caddy; anything smaller means lowering `max_rooms` to match.
 
 ```sh
 cp deploy/inventory.example.ini deploy/inventory.ini   # gitignored
@@ -127,23 +127,27 @@ inventory's `domain`. Unset, every origin is accepted — a development default,
 not a policy. An origin is not an identity; it buys you that another website
 cannot open a socket using a visitor's browser.
 
-Everything else — the idle window, the settled grace, the caps, the rate
-limit — is in
-`config/sys.config` and ships inside the release.
+Everything else is in `config/sys.config` and ships inside the release: the
+idle window (`room_idle_ms`, 30 days), how long a room outlives the meeting it
+scheduled (`finalize_grace_ms`, 24 hours **after the meeting ends**, not after
+the decision), the caps, and the rate limit.
 
 ## How much it holds
 
-| room | in memory | snapshot |
-|---|---|---|
-| 8 attendees, ordinary working week | 2.8 kB | 1.4 kB |
-| 16 attendees, maximally fragmented | 40 kB | ~25 kB |
+Measured at the ceiling with `bench/load.escript`:
 
-At `max_rooms = 20000` that is about 56 MB for real usage and 800 MB if every
-room were deliberately fragmented — which is what `MemoryMax=1536M` in the
-systemd unit is sized against. DETS stops at 2 GB and the file would reach
-500 MB only in the same adversarial case. If you raise either cap the number to
-check is memory, not disk: multiply
-`max_rooms × max_attendees_per_room × 2.5 kB`.
+| 20,000 rooms | per room | total RAM | snapshot | restore at boot |
+|---|---|---|---|---|
+| 8 attendees, ordinary week | 12.4 kB | 242 MB | 37 MB | 2.7s |
+| 16 attendees, maximally fragmented | 58.8 kB | ~1.15 GB | ~205 MB | ~12s |
+
+`MemoryMax=2G` in the systemd unit is sized against the second row. DETS stops
+at 2 GB, which even that does not reach. **Restore is dead time**: the listener
+does not open until it finishes, so a full room table costs a few seconds on
+every deploy and every 04:00 reboot, and up to a dozen against crafted input.
+
+Re-run the bench before raising either cap — the number to check is memory, not
+disk, and it is measured rather than multiplied for a reason.
 
 The ceiling holds a **month** of rooms, not a day, because a room lives on
 idleness. 20,000 is roughly 660 new rooms a day sustained; past that, creation

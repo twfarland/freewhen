@@ -1,204 +1,563 @@
-/* One stylesheet, no framework. The grid is the only interesting part. */
+/*
+ * One stylesheet, no framework.
+ *
+ * Monochrome on purpose: the grid's only job is to say how many people are
+ * free, and tone says that with one variable where hue would need a legend.
+ * Nothing is rounded, nothing is boxed that a rule can separate, and one
+ * screen asks for one thing.
+ *
+ * The two families are served from this host. Loading them from a CDN would
+ * hand every visitor's address to a third party, which is the one thing this
+ * application exists not to do.
+ */
+
+@font-face {
+  font-family: "Newsreader";
+  src: url("/static/fonts/newsreader.woff2") format("woff2");
+  font-weight: 300 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Archivo";
+  src: url("/static/fonts/archivo.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
 
 :root {
-  --ink: #16181d;
-  --paper: #fbfbfa;
-  --muted: #6b7280;
-  --line: #e3e3e0;
-  --accent: #2f6f4f;
-  --mine: #1d4ed8;
+  --paper: #f4f4f2;
+  --raised: #e3e3de;
+  --ink: #131312;
+  --ink-2: #55554f;
+  --ink-3: #8a8a84;
+  --rule: #dcdcd7;
+  --rule-2: #c2c2bb;
+
+  --serif: "Newsreader", ui-serif, Georgia, serif;
+  --sans: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --step: 1.5rem;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #e8e8e6;
-    --paper: #16181d;
-    --muted: #9aa0aa;
-    --line: #2c2f36;
-    --accent: #6fcf97;
-    --mine: #93c5fd;
+    --paper: #100f0f;
+    --raised: #212120;
+    --ink: #e9e9e6;
+    --ink-2: #a5a5a0;
+    --ink-3: #77776f;
+    --rule: #272726;
+    --rule-2: #3c3c3a;
   }
 }
 
 * {
   box-sizing: border-box;
+  border-radius: 0;
 }
 
 body {
-  margin: 0 auto;
-  padding: 2rem 1.25rem 4rem;
-  max-width: 62rem;
+  margin: 0;
+  padding: 0 var(--step) 8rem;
   background: var(--paper);
   color: var(--ink);
-  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 300 17px/1.6 var(--serif);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
 }
 
+#app {
+  max-width: 72rem;
+  margin: 0 auto;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+/* ---------- type ---------- */
+
 h1 {
-  margin: 0;
-  font-size: 1.6rem;
-  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+  font-family: var(--serif);
+  font-size: clamp(2rem, 4.6vw, 3rem);
+  font-weight: 300;
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
 }
 
 h2 {
-  margin: 1.75rem 0 0.5rem;
-  font-size: 1.05rem;
+  margin: 0 0 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
 h3 {
-  margin: 0 0 0.25rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--muted);
-  text-align: center;
+  margin: 0 0 0.55rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
-.tagline,
+p {
+  margin: 0 0 1rem;
+  max-width: 46ch;
+  text-wrap: pretty;
+}
+
+.lede {
+  color: var(--ink-2);
+  font-size: 1.1875rem;
+}
+
 .fineprint {
-  color: var(--muted);
-  font-size: 0.875rem;
-  max-width: 44rem;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--ink-3);
 }
 
 .status {
   min-height: 1.4em;
-  font-size: 0.875rem;
-  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
 }
 
-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
-  align-items: end;
-  margin: 1rem 0;
-}
+/* ---------- controls ---------- */
 
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
-input,
-select,
 button {
-  font: inherit;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--paper);
+  font: 500 0.6875rem/1 var(--sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.9rem 1.6rem;
+  border: 1px solid var(--ink);
+  background: transparent;
   color: var(--ink);
-}
-
-button {
   cursor: pointer;
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 button:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--ink);
+  color: var(--paper);
 }
 
-form .status {
-  flex-basis: 100%;
+button.primary {
+  background: var(--ink);
+  color: var(--paper);
 }
 
-.row {
+button.primary:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* A secondary action that must not read as a second decision. */
+button.quiet {
+  padding: 0;
+  border: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+button.quiet:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+input {
+  font: 300 1.5rem/1.4 var(--serif);
+  width: 100%;
+  padding: 0.5rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--rule-2);
+  background: transparent;
+  color: var(--ink);
+}
+
+input::placeholder {
+  color: var(--ink-3);
+}
+
+input:focus {
+  border-bottom-color: var(--ink);
+}
+
+/* The two choices worth offering, set as words in a sentence rather than as a
+   form — a form implies there is something to fill in, and there is not. */
+.tuning {
+  margin-top: 1.5rem;
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+}
+
+.tuning select {
+  font: inherit;
+  color: var(--ink);
+  padding: 0 1.1em 2px 0;
+  border: 0;
+  border-bottom: 1px solid var(--rule-2);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8a84' stroke-width='1.4'/%3E%3C/svg%3E")
+    no-repeat right center / 0.55em auto;
+  appearance: none;
+  cursor: pointer;
+}
+
+.tuning select:hover {
+  border-bottom-color: var(--ink);
+}
+
+/* ---------- one job per screen ---------- */
+
+.single {
+  max-width: 32rem;
+  margin: 9vh 0 0;
+}
+
+/* The bottom rule is the focus indicator on a text field; a box round it as
+   well is two answers to one question. */
+input:focus-visible {
+  outline: none;
+}
+
+.single .actions {
+  margin-top: 2.5rem;
+}
+
+.actions {
   display: flex;
-  gap: 0.5rem;
-}
-
-.row input {
-  flex: 1;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.8rem;
-}
-
-.panels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  align-items: center;
   gap: 1.5rem;
 }
 
-ul {
+/* ---------- the bar ---------- */
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 1.75rem 0 0.85rem;
+  margin-bottom: 3.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.wordmark {
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.linkbox {
+  display: flex;
+  align-items: baseline;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.linkbox button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.link {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On a phone the address is too long to read and the button is the point. */
+@media (max-width: 40rem) {
+  .link {
+    display: none;
+  }
+}
+
+/* ---------- sharing ---------- */
+
+.share {
+  display: block;
+  max-width: none;
+  font-family: var(--mono);
+  font-size: 1rem;
+  padding: 0.9rem 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- the room ---------- */
+
+.room {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: 3.5rem;
+  align-items: start;
+  margin-top: 2.5rem;
+}
+
+.presets {
+  margin-bottom: 1.25rem;
+}
+
+.head .proposals {
+  margin-top: 2rem;
+  max-width: 30rem;
+}
+
+.head .actions {
+  margin-bottom: 0.5rem;
+}
+
+.head .unsolved {
+  max-width: 42rem;
+}
+
+/* On the planning screen the heading is a label for the work, not a masthead. */
+.head {
+  margin-bottom: 2rem;
+}
+
+.head h1 {
+  margin-bottom: 0.6rem;
+  font-size: clamp(1.75rem, 3.2vw, 2.375rem);
+}
+
+.head .lede {
   margin: 0;
-  padding-left: 1.1rem;
+  font-size: 1rem;
+  max-width: 52ch;
 }
 
-li {
-  margin: 0.2rem 0;
+.rail {
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: var(--ink-2);
 }
 
-/* Which of these is you. The list carries no ids by design, so this matches on
-   the alias — and the client refuses to join under one already in the room. */
-li.you {
+.rail section + section {
+  margin-top: 2.5rem;
+}
+
+/* Calling the meeting off is rare and destructive, so it sits at the foot of
+   the rail rather than anywhere a hand lands by accident. */
+.calloff {
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.calloff .actions {
+  margin-top: 0.75rem;
+  gap: 1rem;
+}
+
+.calloff .actions button.primary {
+  padding: 0.6rem 1rem;
+}
+
+button.spaced {
+  margin-top: 0.9rem;
+}
+
+.rail ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rail li.you {
+  color: var(--ink);
   font-weight: 600;
 }
 
-.tag {
-  margin-left: 0.4rem;
-  padding: 0 0.35rem;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-  font-size: 0.75em;
-  font-weight: 500;
+.rail li.waiting {
+  color: var(--ink-3);
 }
 
-li.waiting {
-  color: var(--muted);
-  font-style: italic;
+@media (max-width: 62rem) {
+  .room {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  .rail {
+    order: 2;
+  }
 }
 
-#candidates button {
+/* ---------- proposals ---------- */
+
+.proposals {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--sans);
+}
+
+.proposals li {
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The host's rows are buttons and everyone else's are text; they have to sit
+   on the same rhythm either way. */
+.proposals li:has(button) {
+  padding: 0;
+}
+
+.proposals button {
+  display: block;
   width: 100%;
+  padding: 0.7rem 0;
+  border: 0;
   text-align: left;
+  font-size: 0.8125rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-2);
 }
 
-.picked {
-  padding: 1rem;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
+.proposals button:hover {
+  background: transparent;
+  color: var(--ink);
 }
 
-.file input {
-  border: none;
-  padding-left: 0;
+/* The time already on the table is in the list so the choice reads as a whole,
+   but choosing it again does nothing. */
+.proposals button[disabled] {
+  color: var(--ink-3);
+  cursor: default;
 }
 
-/* The week: one column per local day, one cell per slot. */
+.proposals .free {
+  float: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.proposals li.all button {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* When the answer is "there isn't one", say so rather than quietly offering
+   the least bad slot as though it were a solution. */
+.unsolved {
+  margin: 0 0 1rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--ink);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+/* ---------- the settled meeting ---------- */
+
+.settled .when {
+  margin: 0 0 2rem;
+  font-size: clamp(1.75rem, 3.6vw, 2.5rem);
+  font-weight: 300;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  max-width: none;
+}
+
+/* ---------- the week ---------- */
+
 .grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 3px;
-  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.6rem;
   overflow-x: auto;
+  padding-bottom: 0.5rem;
 }
 
 .day {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 4.5rem;
+  flex: 1 1 0;
+  min-width: 5rem;
+}
+
+/* The clock gutter sits beside the cells rather than between them, so a
+   column reads as one continuous run of time. */
+.slots {
+  display: grid;
+  grid-template-columns: 2.1rem 1fr;
+  align-items: center;
+  column-gap: 0.4rem;
+  row-gap: 1px;
+}
+
+.hour {
+  font-family: var(--sans);
+  font-size: 0.625rem;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  user-select: none;
 }
 
 /*
- * --weight is the fraction of attendees free in that slot, so the colour is a
+ * --weight is the fraction of attendees free in that slot, so the tone is a
  * count and never an identity: it says three people are free, never which.
+ * The ink rule down the left edge is your own answer — a second variable, so
+ * it cannot be confused with the first.
  */
 .slot {
-  height: 7px;
+  height: 16px;
   padding: 0;
-  border: none;
-  border-radius: 1px;
+  border: 0;
+  border-left: 3px solid transparent;
   cursor: crosshair;
   touch-action: none;
-  background: color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line));
+  background: color-mix(in srgb, var(--ink) calc(var(--weight, 0) * 70%), var(--raised));
+}
+
+.slot:hover {
+  background: color-mix(in srgb, var(--ink) calc(var(--weight, 0) * 70% + 12%), var(--raised));
+}
+
+/* Your own answer. The ink rule reads on a pale cell; the paper hairline
+   beside it reads on a dark one, so the mark survives every count. */
+.slot.mine {
+  border-left-color: var(--ink);
+  box-shadow: inset 1px 0 0 var(--paper);
+}
+
+/* Where the settled meeting sits. Drawn outside the cell so it lands on paper
+   rather than on the fill, and is legible at every count. */
+.slot.chosen {
+  outline: 1.5px solid var(--ink);
+  outline-offset: 2px;
+  z-index: 1;
 }
 
 /* The grid is one tab stop with a roving tabindex, so the focused cell has to
@@ -209,18 +568,16 @@ li.waiting {
   z-index: 1;
 }
 
-.slot.everyone {
-  outline: 1px solid var(--accent);
+/* Outside this viewer's own working day. Still paintable — somebody's evening
+   is somebody else's morning — but it should not compete for attention, and
+   shrinking it takes most of the height out of a 24-hour grid. */
+.slot.off {
+  height: 6px;
+  opacity: 0.4;
 }
 
-/* Your own answer, drawn over the shading so you can see what you offered. */
-.slot.mine {
-  background: repeating-linear-gradient(
-    45deg,
-    var(--mine),
-    var(--mine) 2px,
-    color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line)) 2px,
-    color-mix(in srgb, var(--accent) calc(var(--weight, 0) * 85%), var(--line)) 4px
-  );
+/* The status line rides with the presets rather than reserving a row of its
+   own: an empty row of nothing is still something to read past. */
+.actions .status {
+  min-height: 0;
 }
-

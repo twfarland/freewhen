@@ -18,6 +18,14 @@ export type Attendee = {
   ready: boolean
 }
 
+/**
+ * How far the meeting has got. The server derives this from availability and
+ * nothing else, so it can never disagree with what people actually said — and
+ * there is deliberately no acceptance to keep in step with it, because the
+ * invitation exported from a confirmed meeting is where people really RSVP.
+ */
+export type Phase = 'collecting' | 'ready' | 'confirmed' | 'provisional'
+
 export type Proposal = {
   slot: number
   free: number
@@ -26,6 +34,7 @@ export type Proposal = {
 }
 
 export type Room = {
+  phase: Phase
   grid: Grid
   durationSlots: number
   attendees: Attendee[]
@@ -46,6 +55,9 @@ export type ClientMessage =
   | { type: 'join'; alias: string }
   | { type: 'submit'; attendeeId: string; free: string }
   | { type: 'pick'; hostToken: string; slot: number }
+  | { type: 'unpick'; hostToken: string }
+  | { type: 'excludeSilent'; hostToken: string }
+  | { type: 'cancel'; hostToken: string }
 
 export type RoomShape = {
   startsAt: number
