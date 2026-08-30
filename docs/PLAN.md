@@ -2,17 +2,20 @@
 
 ## Where this is
 
-A working product, feature-complete as a technical prototype. Create a room,
+A working product, feature-complete as a technical prototype. Start a meeting,
 share the link, join under an alias, set your availability from a preset and
-adjust it by dragging or with the keyboard, watch the heatmap update live for
-everyone, and have whoever started the room pick a time and export an
-invitation. Rooms delete themselves, and neither a release nor a reboot costs
-them.
+adjust it by dragging or with the keyboard, and watch the heatmap update live
+for everyone. Once everybody has answered, whoever started it picks a time and
+everybody exports an invitation; the host can move it, go ahead without whoever
+never answered, or call the whole thing off. A chosen time that somebody can no
+longer make says so by itself. Rooms delete themselves, and neither a release
+nor a reboot costs them.
 
 ```
-rebar3 do compile, eunit, ct, xref, dialyzer   102 unit + 26 integration, clean
-cd web && npm run check && npm test             strict tsc, 56 client tests
-cd web && npm run build                         ~10 kB gzipped
+rebar3 do compile, eunit, ct, xref, dialyzer   148 unit + 32 integration, clean
+cd web && npm run check && npm test             strict tsc, 58 client tests
+cd web && npm run build                         ~12 kB gzipped
+escript bench/load.escript                      fill to the ceiling and measure
 rebar3 as prod tar                              the deployable artefact, Ubuntu only
 ```
 
